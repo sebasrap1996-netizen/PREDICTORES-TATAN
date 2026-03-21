@@ -303,10 +303,22 @@ def _scan_game_obj(obj, label="", cmd="", depth=0):
             continue
 
         if key in GAME_KEYS:
-            m = _parse_mult(val)
+            # Spribe sends multipliers as integers in x100 format:
+            # odd=234 means 2.34x, odd=150 means 1.50x
+            X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
+                             "crashValue", "endK", "crashMultiplier",
+                             "finalMultiplier", "coefficient"}
+            if key in X100_INT_KEYS and isinstance(val, int):
+                if val < 100:
+                    continue  # < 1.00x, not a valid crash multiplier
+                parsed_val = round(val / 100.0, 2)
+                log.debug("[%s] x100 convert: key='%s' raw=%d -> %.2f", label, key, val, parsed_val)
+            else:
+                parsed_val = val
+            m = _parse_mult(parsed_val)
             if m is not None:
                 results.append(m)
-                log.info("[%s] ★ FOUND mult=%.2f key='%s' cmd='%s'", label, m, key, cmd)
+                log.info("[%s] FOUND mult=%.2fx key='%s' raw_val=%s cmd='%s'", label, m, key, val, cmd)
 
         elif isinstance(val, dict):
             results.extend(_scan_game_obj(val, label, cmd, depth+1))
@@ -336,25 +348,9 @@ def _parse_mult(val):
 
     fv = float(val)
 
-    # Reject known protocol values
-    REJECT = {0, 1, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 500000}
-    if fv in REJECT:
-        return None
-
-    # Direct multiplier: 1.01 to 9999.99
-    if 1.01 <= fv <= 9999.99:
-        # Extra: reject exact powers of 2
-        if fv == int(fv) and int(fv) > 0:
-            iv = int(fv)
-            if iv & (iv - 1) == 0 and iv >= 256:
-                return None
+    # Valid crash multiplier range: 1.00x to 9999.99x
+    if 1.00 <= fv <= 9999.99:
         return round(fv, 2)
-
-    # x100 format: 100 -> 1.00, 101 -> 1.01
-    if isinstance(val, int) and 100 <= val <= 999999:
-        cv = round(val / 100.0, 2)
-        if 1.00 <= cv <= 9999.99:
-            return cv
 
     return None
 
