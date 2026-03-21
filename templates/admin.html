@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PREDICTORES TATAN — Aviator Scraper Admin</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #0a0a0f;
+  --bg-card: #12121a;
+  --bg-card-hover: #1a1a26;
+  --bg-input: #0e0e16;
+  --border: #1e1e2e;
+  --border-focus: #f59e0b;
+  --gold: #f59e0b;
+  --gold-dim: #b45309;
+  --gold-glow: rgba(245, 158, 11, 0.15);
+  --green: #10b981;
+  --green-dim: rgba(16, 185, 129, 0.15);
+  --red: #ef4444;
+  --red-dim: rgba(239, 68, 68, 0.15);
+  --blue: #3b82f6;
+  --blue-dim: rgba(59, 130, 246, 0.15);
+  --text: #e2e8f0;
+  --text-dim: #64748b;
+  --text-muted: #475569;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: 'Space Grotesk', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* --- Animated bg --- */
+body::before {
+  content: '';
+  position: fixed;
+  top: -50%; left: -50%;
+  width: 200%; height: 200%;
+  background: radial-gradient(ellipse at 30% 20%, rgba(245,158,11,0.03) 0%, transparent 50%),
+              radial-gradient(ellipse at 70% 80%, rgba(59,130,246,0.02) 0%, transparent 50%);
+  animation: drift 30s ease-in-out infinite alternate;
+  z-index: 0;
+  pointer-events: none;
+}
+@keyframes drift { to { transform: translate(5%, 3%) rotate(2deg); } }
+
+/* --- Layout --- */
+.shell { max-width: 1280px; margin: 0 auto; padding: 24px 20px; position: relative; z-index: 1; }
+
+/* --- Header --- */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 0 28px; border-bottom: 1px solid var(--border);
+  margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
+}
+.logo { display: flex; align-items: center; gap: 14px; }
+.logo-icon {
+  width: 44px; height: 44px; border-radius: 12px;
+  background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+  display: grid; place-items: center; font-size: 22px;
+  box-shadow: 0 0 24px var(--gold-glow);
+}
+.logo h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+.logo h1 span { color: var(--gold); }
+.logo sub { font-size: 11px; color: var(--text-dim); font-weight: 400; letter-spacing: 1px; text-transform: uppercase; }
+
+.health-badge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-radius: 999px;
+  background: var(--green-dim); border: 1px solid rgba(16,185,129,0.3);
+  font-size: 12px; font-weight: 600; color: var(--green);
+  font-family: var(--font-mono);
+}
+.health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* --- Buttons --- */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 20px; border-radius: 10px; border: none;
+  font-family: var(--font-sans); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.2s;
+}
+.btn-gold {
+  background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+  color: #000; box-shadow: 0 0 20px var(--gold-glow);
+}
+.btn-gold:hover { transform: translateY(-1px); box-shadow: 0 4px 28px var(--gold-glow); }
+.btn-ghost {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.btn-ghost:hover { border-color: var(--text-dim); color: var(--text); }
+.btn-red { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
+.btn-red:hover { background: rgba(239,68,68,0.25); }
+.btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+
+/* --- Cards --- */
+.card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 16px; padding: 24px; margin-bottom: 20px;
+  transition: border-color 0.3s;
+}
+.card:hover { border-color: rgba(245,158,11,0.2); }
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 20px; flex-wrap: wrap; gap: 10px;
+}
+.card-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+
+/* --- Form --- */
+.form-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full { grid-column: 1 / -1; }
+label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+input, textarea, select {
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px; color: var(--text);
+  font-family: var(--font-mono); font-size: 13px;
+  transition: border-color 0.2s;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none; border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--gold-glow);
+}
+textarea { resize: vertical; min-height: 42px; }
+select { appearance: none; cursor: pointer; }
+
+.toggle-row { display: flex; align-items: center; gap: 20px; padding-top: 8px; }
+.toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.toggle input { display: none; }
+.toggle-track {
+  width: 40px; height: 22px; border-radius: 11px;
+  background: var(--border); position: relative; transition: background 0.2s;
+}
+.toggle input:checked + .toggle-track { background: var(--gold); }
+.toggle-track::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: transform 0.2s;
+}
+.toggle input:checked + .toggle-track::after { transform: translateX(18px); }
+
+/* --- Table --- */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; padding: 12px 16px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.8px;
+  color: var(--text-muted); border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+td {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  font-size: 13px; vertical-align: middle;
+}
+tr:hover td { background: var(--bg-card-hover); }
+
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  font-family: var(--font-mono);
+}
+.status-connected { background: var(--green-dim); color: var(--green); }
+.status-disconnected { background: rgba(100,116,139,0.15); color: var(--text-dim); }
+.status-connecting { background: var(--blue-dim); color: var(--blue); }
+.status-error { background: var(--red-dim); color: var(--red); }
+
+.rec-star { color: var(--gold); font-size: 16px; }
+
+/* --- Crashes panel --- */
+.crashes-panel {
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px; margin-top: 16px;
+  max-height: 320px; overflow-y: auto;
+  font-family: var(--font-mono); font-size: 12px;
+}
+.crash-entry {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 8px; margin: 3px;
+  font-weight: 600;
+}
+.crash-low { background: var(--blue-dim); color: var(--blue); }
+.crash-mid { background: var(--green-dim); color: var(--green); }
+.crash-high { background: var(--gold-glow); color: var(--gold); }
+.crash-mega { background: var(--red-dim); color: var(--red); }
+
+/* --- Modal overlay --- */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+  z-index: 1000; place-items: center;
+}
+.modal-overlay.active { display: grid; }
+.modal {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 20px; padding: 32px; width: 95%; max-width: 680px;
+  max-height: 90vh; overflow-y: auto;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+.modal h2 { font-size: 20px; font-weight: 700; margin-bottom: 24px; }
+.modal h2 span { color: var(--gold); }
+
+/* --- Toast --- */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 600;
+  animation: slideIn 0.3s ease-out;
+  font-family: var(--font-sans);
+}
+.toast-success { background: var(--green-dim); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+.toast-error { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* --- Empty state --- */
+.empty-state {
+  text-align: center; padding: 60px 20px; color: var(--text-muted);
+}
+.empty-state .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+.empty-state p { font-size: 14px; }
+
+/* --- Crash viewer --- */
+.viewer-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; animation: pulse 1s infinite; margin-right: 6px; }
+
+/* --- Scrollbar --- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🛩️</div>
+      <div>
+        <h1>PREDICTORES <span>TATAN</span></h1>
+        <sub>Aviator Scraper Manager</sub>
+      </div>
+    </div>
+    <div class="health-badge" id="healthBadge">
+      <div class="health-dot"></div>
+      <span id="healthText">Cargando...</span>
+    </div>
+  </header>
+
+  <!-- Toolbar -->
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
+    <div style="font-size:14px; color:var(--text-dim);" id="bmCount">0 bookmakers</div>
+    <button class="btn btn-gold" onclick="openModal()">
+      <span>＋</span> Nuevo Bookmaker
+    </button>
+  </div>
+
+  <!-- Bookmakers Table -->
+  <div class="card" id="tableCard">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Estado</th>
+            <th>Decoder</th>
+            <th>Crashes</th>
+            <th>Rec.</th>
+            <th style="text-align:right">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="bmTableBody">
+        </tbody>
+      </table>
+    </div>
+    <div class="empty-state" id="emptyState">
+      <div class="icon">🛩️</div>
+      <p>Sin bookmakers. Agrega uno para empezar a capturar.</p>
+    </div>
+  </div>
+
+  <!-- Live Crash Viewer -->
+  <div class="card" id="crashViewer" style="display:none;">
+    <div class="viewer-header">
+      <div>
+        <span class="card-title"><span class="live-dot"></span> Crashes en vivo — <span id="viewerName"></span></span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeCrashViewer()">Cerrar</button>
+    </div>
+    <div class="crashes-panel" id="crashesContainer"></div>
+  </div>
+
+  <!-- Debug Frame Viewer -->
+  <div class="card" id="debugPanel" style="display:none;">
+    <div class="viewer-header">
+      <div>
+        <span class="card-title">🔍 Debug Frames — <span id="debugName"></span></span>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;" id="debugStatus"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="refreshDebug()">Refrescar</button>
+        <button class="btn btn-ghost btn-sm" onclick="closeDebug()">Cerrar</button>
+      </div>
+    </div>
+    <div class="crashes-panel" id="debugContainer" style="max-height:500px;font-size:11px;line-height:1.6;"></div>
+  </div>
+</div>
+
+<!-- Modal: Nuevo/Editar Bookmaker -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h2 id="modalTitle"><span>Nuevo</span> Bookmaker</h2>
+    <input type="hidden" id="editId">
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Nombre</label>
+        <input type="text" id="fName" placeholder="ej. 1xBet Aviator">
+      </div>
+      <div class="form-group">
+        <label>Tipo Decoder</label>
+        <select id="fDecoder">
+          <option value="auto">Auto (Recomendado)</option>
+          <option value="msgpack">MessagePack</option>
+          <option value="sfs">SmartFoxServer (SFS)</option>
+        </select>
+      </div>
+      <div class="form-group full">
+        <label>Descripción</label>
+        <input type="text" id="fDesc" placeholder="Descripción opcional">
+      </div>
+      <div class="form-group full">
+        <label>URL WebSocket</label>
+        <input type="text" id="fWsUrl" placeholder="wss://sa-east-1-game5.spribegaming.com/BlueBox/websocket">
+      </div>
+      <div class="form-group full">
+        <label>Primer Mensaje (Base64)</label>
+        <textarea id="fMsg1" rows="2" placeholder="Base64 encoded binary message..."></textarea>
+      </div>
+      <div class="form-group full">
+        <label>Segundo Mensaje (Base64)</label>
+        <textarea id="fMsg2" rows="2" placeholder="Base64 encoded binary message..."></textarea>
+      </div>
+      <div class="form-group full">
+        <label>Tercer Mensaje (Base64)</label>
+        <textarea id="fMsg3" rows="2" placeholder="Base64 encoded binary message..."></textarea>
+      </div>
+      <div class="form-group full">
+        <div class="toggle-row">
+          <label class="toggle">
+            <input type="checkbox" id="fActive" checked>
+            <div class="toggle-track"></div>
+            Activo
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="fRec">
+            <div class="toggle-track"></div>
+            Recomendado
+          </label>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-gold" onclick="saveBm()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const API = '/api/aviator/bookmakers';
+let sseSource = null;
+let currentViewerId = null;
+
+// --- Toast ---
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// --- API helpers ---
+async function apiFetch(url, opts = {}) {
+  try {
+    const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    return await r.json();
+  } catch (e) {
+    toast('Error de red: ' + e.message, 'error');
+    return null;
+  }
+}
+
+// --- Load bookmakers ---
+async function loadBm() {
+  const data = await apiFetch(API);
+  if (!data) return;
+
+  const tbody = document.getElementById('bmTableBody');
+  const empty = document.getElementById('emptyState');
+  document.getElementById('bmCount').textContent = `${data.length} bookmaker${data.length !== 1 ? 's' : ''}`;
+
+  if (data.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = data.map(bm => `
+    <tr>
+      <td>
+        <div style="font-weight:600;">${esc(bm.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);margin-top:2px;">${esc(bm.ws_url || '—').substring(0, 50)}...</div>
+      </td>
+      <td><span class="status-pill status-${bm.connection_status || 'disconnected'}">${statusIcon(bm.connection_status)} ${bm.connection_status || 'off'}</span></td>
+      <td style="font-family:var(--font-mono);font-size:12px;">${esc(bm.decoder_type || 'auto')}</td>
+      <td>
+        <span style="font-family:var(--font-mono);font-weight:600;cursor:pointer;color:var(--gold);" onclick="openCrashViewer('${bm.id}','${esc(bm.name)}')">${bm.crash_count || 0}</span>
+      </td>
+      <td>${bm.recommended ? '<span class="rec-star">★</span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
+      <td style="text-align:right;white-space:nowrap;">
+        <button class="btn btn-ghost btn-sm" onclick="openDebug('${bm.id}','${esc(bm.name)}')" title="Ver frames raw">🔍</button>
+        <button class="btn btn-ghost btn-sm" onclick="editBm('${bm.id}')">Editar</button>
+        <button class="btn btn-red btn-sm" onclick="deleteBm('${bm.id}','${esc(bm.name)}')">Eliminar</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function statusIcon(s) {
+  if (s === 'connected') return '●';
+  if (s === 'connecting') return '◌';
+  if (s === 'error') return '✕';
+  return '○';
+}
+
+function esc(s) { 
+  if (!s) return '';
+  const d = document.createElement('div'); 
+  d.textContent = s; 
+  return d.innerHTML; 
+}
+
+// --- Modal ---
+function openModal(bm = null) {
+  document.getElementById('editId').value = bm ? bm.id : '';
+  document.getElementById('modalTitle').innerHTML = bm ? '<span>Editar</span> Bookmaker' : '<span>Nuevo</span> Bookmaker';
+  document.getElementById('fName').value = bm ? bm.name : '';
+  document.getElementById('fDesc').value = bm ? bm.description : '';
+  document.getElementById('fWsUrl').value = bm ? bm.ws_url : '';
+  document.getElementById('fMsg1').value = bm ? bm.msg1_b64 : '';
+  document.getElementById('fMsg2').value = bm ? bm.msg2_b64 : '';
+  document.getElementById('fMsg3').value = bm ? bm.msg3_b64 : '';
+  document.getElementById('fDecoder').value = bm ? bm.decoder_type : 'auto';
+  document.getElementById('fActive').checked = bm ? bm.active : true;
+  document.getElementById('fRec').checked = bm ? bm.recommended : false;
+  document.getElementById('modalOverlay').classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+}
+
+async function editBm(id) {
+  const data = await apiFetch(API);
+  const bm = data?.find(b => b.id === id);
+  if (bm) openModal(bm);
+}
+
+async function saveBm() {
+  const id = document.getElementById('editId').value;
+  const body = {
+    name: document.getElementById('fName').value,
+    description: document.getElementById('fDesc').value,
+    ws_url: document.getElementById('fWsUrl').value,
+    msg1_b64: document.getElementById('fMsg1').value,
+    msg2_b64: document.getElementById('fMsg2').value,
+    msg3_b64: document.getElementById('fMsg3').value,
+    decoder_type: document.getElementById('fDecoder').value,
+    active: document.getElementById('fActive').checked,
+    recommended: document.getElementById('fRec').checked,
+  };
+
+  if (!body.name || !body.ws_url) {
+    toast('Nombre y URL WebSocket son requeridos', 'error');
+    return;
+  }
+
+  let result;
+  if (id) {
+    result = await apiFetch(`${API}/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  } else {
+    result = await apiFetch(API, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  if (result && !result.error) {
+    toast(id ? 'Bookmaker actualizado' : 'Bookmaker creado');
+    closeModal();
+    loadBm();
+  } else {
+    toast(result?.error || 'Error guardando', 'error');
+  }
+}
+
+async function deleteBm(id, name) {
+  if (!confirm(`¿Eliminar "${name}"?`)) return;
+  const result = await apiFetch(`${API}/${id}`, { method: 'DELETE' });
+  if (result && result.deleted) {
+    toast('Bookmaker eliminado');
+    if (currentViewerId === id) closeCrashViewer();
+    loadBm();
+  }
+}
+
+// --- Crash Viewer with SSE ---
+async function openCrashViewer(id, name) {
+  closeCrashViewer();
+  currentViewerId = id;
+  document.getElementById('viewerName').textContent = name;
+  document.getElementById('crashViewer').style.display = '';
+
+  // Load existing crashes
+  const existing = await apiFetch(`${API}/${id}/crashes?limit=200`);
+  const container = document.getElementById('crashesContainer');
+  container.innerHTML = '';
+  if (existing) {
+    existing.forEach(c => appendCrash(c));
+  }
+
+  // SSE stream
+  sseSource = new EventSource(`${API}/${id}/crashes/stream`);
+  sseSource.onmessage = (e) => {
+    try {
+      const crash = JSON.parse(e.data);
+      appendCrash(crash);
+      // Auto-refresh table count
+      loadBm();
+    } catch (err) {}
+  };
+  sseSource.onerror = () => {
+    console.warn('SSE error, reconnecting...');
+  };
+}
+
+function appendCrash(c) {
+  const container = document.getElementById('crashesContainer');
+  const el = document.createElement('span');
+  const m = c.multiplier;
+  let cls = 'crash-low';
+  if (m >= 10) cls = 'crash-mega';
+  else if (m >= 5) cls = 'crash-high';
+  else if (m >= 2) cls = 'crash-mid';
+  el.className = `crash-entry ${cls}`;
+  el.textContent = `${m}x`;
+  el.title = c.timestamp || '';
+  container.prepend(el);
+  // Keep max 300 visible
+  while (container.children.length > 300) container.lastChild.remove();
+}
+
+function closeCrashViewer() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+  currentViewerId = null;
+  document.getElementById('crashViewer').style.display = 'none';
+  document.getElementById('crashesContainer').innerHTML = '';
+}
+
+// --- Health check ---
+async function checkHealth() {
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    document.getElementById('healthText').textContent =
+      `${d.active_connections || 0} activas / ${d.bookmakers || 0} BMs / ${d.total_crashes || 0} crashes`;
+  } catch {
+    document.getElementById('healthText').textContent = 'Offline';
+  }
+}
+
+// --- Debug Frame Viewer ---
+let debugBmId = null;
+
+async function openDebug(id, name) {
+  debugBmId = id;
+  document.getElementById('debugName').textContent = name;
+  document.getElementById('debugPanel').style.display = '';
+  await refreshDebug();
+}
+
+async function refreshDebug() {
+  if (!debugBmId) return;
+  const data = await apiFetch(`${API}/${debugBmId}/debug`);
+  if (!data) return;
+
+  document.getElementById('debugStatus').textContent =
+    `Estado: ${data.connection_status} | Frames: ${data.frame_count} | Crashes: ${data.crash_count}`;
+
+  const container = document.getElementById('debugContainer');
+  if (!data.frames || data.frames.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">Sin frames recibidos aún. Verifica que el WS esté conectado y los mensajes Base64 sean correctos.</div>';
+    return;
+  }
+
+  container.innerHTML = data.frames.map((f, i) => {
+    const isText = f.type === 'TEXT';
+    const methodColor = {
+      'json': '#a78bfa', 'json_lines': '#a78bfa', 'json_embed': '#a78bfa',
+      'msgpack': 'var(--blue)', 'raw_double': 'var(--gold)', 'regex': '#f472b6', 'regex_div100': '#f472b6',
+    };
+    const mColor = (f.method && f.method.startsWith('sfs')) ? 'var(--green)' : (methodColor[f.method] || 'var(--text-dim)');
+
+    let decodedHtml = '';
+    if (f.decoded) {
+      decodedHtml = `<div style="color:${mColor};margin-top:4px;word-break:break-all;"><b>${esc(f.method || '?')}:</b> ${esc(String(f.decoded).substring(0,800))}</div>`;
+    } else {
+      decodedHtml = '<div style="color:var(--text-muted);margin-top:4px;">⚠ No se pudo decodificar</div>';
+    }
+
+    let multsHtml = '';
+    if (f.mults && f.mults.length > 0) {
+      multsHtml = `<div style="margin-top:4px;">${f.mults.map(m => {
+        let cls = 'crash-low';
+        if (m >= 10) cls = 'crash-mega';
+        else if (m >= 5) cls = 'crash-high';
+        else if (m >= 2) cls = 'crash-mid';
+        return '<span class="crash-entry ' + cls + '">★ ' + m + 'x</span>';
+      }).join(' ')}</div>`;
+    }
+
+    const rawInfo = isText
+      ? `<div style="margin-top:6px;word-break:break-all;"><span style="color:var(--text-dim);">TEXT:</span> ${esc((f.text_preview||'').substring(0,400))}</div>`
+      : `<div style="margin-top:6px;word-break:break-all;"><span style="color:var(--text-dim);">HEX:</span> ${esc(f.hex||'')}</div>
+         <div style="margin-top:2px;word-break:break-all;"><span style="color:var(--text-dim);">ASCII:</span> ${esc(f.ascii||'')}</div>`;
+
+    return `<div style="border-bottom:1px solid var(--border);padding:10px 0;">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
+        <span style="color:var(--gold);font-weight:600;">Frame #${data.frames.length - i} <span style="font-size:10px;color:${isText?'#a78bfa':'var(--blue)'}">[${isText?'TEXT':'BIN'}]</span></span>
+        <span style="color:var(--text-muted);">${f.time || ''} | ${f.size} ${isText?'chars':'bytes'}</span>
+      </div>
+      ${rawInfo}
+      ${decodedHtml}
+      ${multsHtml}
+    </div>`;
+  }).reverse().join('');
+}
+
+function closeDebug() {
+  debugBmId = null;
+  document.getElementById('debugPanel').style.display = 'none';
+  document.getElementById('debugContainer').innerHTML = '';
+}
+
+// --- Close modal on overlay click ---
+document.getElementById('modalOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+// --- Init ---
+loadBm();
+checkHealth();
+setInterval(loadBm, 15000);
+setInterval(checkHealth, 10000);
+</script>
+</body>
+</html>
