@@ -153,16 +153,25 @@ PROTOCOL_KEYS = {
 GAME_KEYS = {
     "odd", "odds", "multiplier", "crash", "result",
     "coefficient", "crashValue", "endK", "bust",
+    "k", "coef", "coeff", "x", "factor",
+    "crashMultiplier", "finalMultiplier", "roundResult",
 }
 
 # Spribe extension command names that carry game round results
 GAME_COMMANDS = {
     "N",                   # new round result (crash value)
+    "F",                   # finish / crash
+    "R",                   # round result
+    "end",
+    "finish",
     "currentbetsresult",
     "aviator.crash",
     "game.result",
     "crash",
     "roundEnd",
+    "roundend",
+    "gameend",
+    "gameEnd",
 }
 
 # Spribe extension command names for game state (not crashes, but useful)
@@ -224,6 +233,11 @@ def classify_frame(obj):
                 return (f"ext:{cmd}", True)
         return ("extension", True)
 
+    # Non-extension frames: still scan for game data if they contain game keys
+    # (some bookmakers use non-standard a values)
+    if isinstance(p, dict) and any(k in p for k in GAME_KEYS):
+        return (f"sfs_c{c}_a{a}_gamedata", True)
+
     # Ping/pong
     if c == 7:
         return ("ping", False)
@@ -256,6 +270,16 @@ def extract_game_mults(obj, label=""):
     # Search in inner params first (p.p)
     if isinstance(inner_p, dict):
         results.extend(_scan_game_obj(inner_p, label, cmd))
+
+    # Also search common Spribe subkeys: r, data, result, res, round
+    for subkey in ("r", "data", "result", "res", "round", "game", "info"):
+        sub = p.get(subkey) if isinstance(p, dict) else None
+        if isinstance(sub, dict):
+            results.extend(_scan_game_obj(sub, label, cmd))
+        elif isinstance(sub, list):
+            for item in sub:
+                if isinstance(item, dict):
+                    results.extend(_scan_game_obj(item, label, cmd))
 
     # Also search in p directly (some formats put data at top level of p)
     if not results:
@@ -326,10 +350,10 @@ def _parse_mult(val):
                 return None
         return round(fv, 2)
 
-    # x100 format: 101 -> 1.01
-    if isinstance(val, int) and 101 <= val <= 999999:
+    # x100 format: 100 -> 1.00, 101 -> 1.01
+    if isinstance(val, int) and 100 <= val <= 999999:
         cv = round(val / 100.0, 2)
-        if 1.01 <= cv <= 9999.99:
+        if 1.00 <= cv <= 9999.99:
             return cv
 
     return None
@@ -570,6 +594,12 @@ def _start_ws(bm_id):
             auth_state["step"] = "authenticated"
             time.sleep(0.3)
             send_msg(ws, msg3, 3, "Extension:currentBets")
+            # Process any game data that arrived with the login response
+            if is_game and parsed:
+                mults = extract_game_mults(parsed, name)
+                dbg["mults"] = mults
+                for m in mults:
+                    _record_crash(bm_id, name, m)
 
         elif step == "wait_login_resp" and "ext" in ftype:
             # Sometimes login response is followed immediately by extensions
