@@ -27,8 +27,7 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 # Stores
 # ---------------------------------------------------------------------------
-CONFIG_PATH   = os.path.join(os.path.dirname(__file__), "config.json")
-CRASHES_PATH  = os.path.join(os.path.dirname(__file__), "crashes.json")
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 bookmakers: dict = {}
 crashes: dict = defaultdict(list)
 ws_connections: dict = {}
@@ -54,17 +53,6 @@ def _load_config():
             return
         except Exception as e:
             log.error("Failed to load from BOOKMAKERS_JSON env var: %s", e)
-
-    # 1b. Cargar crashes desde crashes.json si existe (persiste entre reinicios)
-    if os.path.exists(CRASHES_PATH):
-        try:
-            with open(CRASHES_PATH) as f:
-                saved = json.load(f)
-            for k, v in saved.items():
-                crashes[k] = v
-            log.info("Loaded crashes from crashes.json (%d bookmakers)", len(saved))
-        except Exception as e:
-            log.error("crashes.json load fail: %s", e)
 
     # 2. Fallback: archivo local config.json (desarrollo local / primer deploy)
     if os.path.exists(CONFIG_PATH):
@@ -92,16 +80,6 @@ def _save_config():
                       f, indent=2, default=str)
     except Exception as e:
         log.error("Save fail: %s", e)
-
-def _save_crashes():
-    """Guarda solo crashes en crashes.json — se llama en cada registro."""
-    try:
-        with open(CRASHES_PATH, "w") as f:
-            # Solo últimos 30 por bookmaker para no crecer indefinidamente
-            slim = {k: v[-30:] for k, v in crashes.items()}
-            json.dump(slim, f, default=str)
-    except Exception as e:
-        log.error("crashes.json save fail: %s", e)
 
 # ---------------------------------------------------------------------------
 # SFS2X Decoder
@@ -552,10 +530,13 @@ def _start_ws(bm_id):
     if not ws_url:
         connection_status[bm_id] = "error"; return
 
-    # Cerrar conexión anterior si existe
-    _stop_ws(bm_id)
+    # Cerrar conexión anterior limpiamente si existe
+    old_ws = ws_connections.pop(bm_id, None)
+    if old_ws:
+        try: old_ws.close()
+        except: pass
 
-    # Nueva generación — el hilo anterior la detectará y se descartará
+    # Nueva generación — cualquier hilo anterior se descartará al verificar gen
     gen = ws_generation.get(bm_id, 0) + 1
     ws_generation[bm_id] = gen
 
@@ -712,8 +693,12 @@ def _start_ws(bm_id):
         # Solo reconectar si este hilo sigue siendo el activo
         if ws_generation.get(bm_id) == gen and bm_id in bookmakers and bookmakers[bm_id].get("active", False):
             log.info("[%s] Reconnect in 5s...", name)
-            time.sleep(5)
-            _start_ws(bm_id)
+            def _reconnect():
+                time.sleep(5)
+                # Re-verificar que sigue siendo el activo después del sleep
+                if ws_generation.get(bm_id) == gen and bm_id in bookmakers and bookmakers[bm_id].get("active", False):
+                    _start_ws(bm_id)
+            threading.Thread(target=_reconnect, daemon=True).start()
         else:
             log.debug("[%s] on_close: stale gen %d, skip reconnect", name, gen)
 
@@ -768,8 +753,6 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
         try: q.put_nowait(entry)
         except: pass
     log.info("[%s] ★★★ CRASH RECORDED: %.2fx ★★★", bm_name, multiplier)
-    # Guardar crashes inmediatamente en archivo separado (sobrevive reinicios)
-    _save_crashes()
     if len(crashes[bm_id]) % 10 == 0:
         _save_config()
 
