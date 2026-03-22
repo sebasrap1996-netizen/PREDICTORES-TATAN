@@ -149,15 +149,15 @@ PROTOCOL_KEYS = {
     "xt", "pi",                         # extension name, ping
 }
 
-# Spribe game multiplier keys
+# Spribe game multiplier keys — SOLO para crashes, no ticks en vuelo
 GAME_KEYS = {
-    "odd", "odds", "multiplier", "crash", "result",
+    "odd", "odds", "crash", "result",
     "coefficient", "crashValue", "endK", "bust",
-    "k", "coef", "coeff", "x", "factor",
+    "coef", "coeff",
     "crashMultiplier", "finalMultiplier", "roundResult",
 }
 
-# Spribe extension command names that carry game round results
+# Spribe extension command names que llevan el resultado final del crash
 GAME_COMMANDS = {
     "N",                   # new round result (crash value)
     "F",                   # finish / crash
@@ -172,6 +172,19 @@ GAME_COMMANDS = {
     "roundend",
     "gameend",
     "gameEnd",
+}
+
+# Comandos de estado/tick que NO son crashes — ignorar multiplicadores de estos
+TICK_COMMANDS = {
+    "x",           # tick del multiplicador en vuelo
+    "X",
+    "tick",
+    "update",
+    "updateCurrentCashOuts",
+    "currentCashOuts",
+    "B",           # bet info
+    "T",           # timer/tick
+    "S",           # state update (durante el vuelo)
 }
 
 # Spribe extension command names for game state (not crashes, but useful)
@@ -253,6 +266,7 @@ def extract_game_mults(obj, label=""):
     """
     Extract crash multipliers from an extension response.
     Only looks in the 'p' (params) sub-object of extension frames.
+    Ignora comandos de tick/vuelo — solo captura crashes reales.
     """
     if not isinstance(obj, dict):
         return []
@@ -264,6 +278,10 @@ def extract_game_mults(obj, label=""):
     # The game data is inside p.p (params.params) for extension responses
     inner_p = p.get("p")
     cmd = p.get("c", "")
+
+    # Ignorar comandos de tick — son el multiplicador subiendo, no el crash
+    if isinstance(cmd, str) and cmd.lower() in {c.lower() for c in TICK_COMMANDS}:
+        return []
 
     results = []
 
@@ -801,6 +819,24 @@ def health():
         "active": sum(1 for s in connection_status.values() if s == "connected"),
         "crashes": sum(len(v) for v in crashes.values()),
     })
+
+@app.route("/api/aviator/bookmakers/<bid>/ingest", methods=["POST"])
+def ingest_crash(bid):
+    """
+    Endpoint para el DOM scraper (Playwright).
+    Recibe: {"multiplier": 2.34, "source": "dom_scraper", "timestamp": "..."}
+    """
+    if bid not in bookmakers:
+        return jsonify({"error": "Not found"}), 404
+    d = request.get_json(force=True)
+    mult = d.get("multiplier")
+    if not isinstance(mult, (int, float)) or not (1.00 <= float(mult) <= 9999.99):
+        return jsonify({"error": "Invalid multiplier"}), 400
+    source = d.get("source", "unknown")
+    name = bookmakers[bid].get("name", bid)
+    log.info("[%s] INGEST from %s: %.2fx", name, source, mult)
+    _record_crash(bid, name, float(mult))
+    return jsonify({"ok": True, "multiplier": mult}), 201
 
 # ---------------------------------------------------------------------------
 _load_config()
