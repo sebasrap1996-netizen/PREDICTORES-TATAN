@@ -692,16 +692,19 @@ def _start_ws(bm_id):
 
 
 def _record_crash(bm_id, bm_name, multiplier):
-    recent = crashes.get(bm_id, [])
-    if recent:
-        last = recent[-1]
-        if last["multiplier"] == multiplier:
-            try:
-                last_t = datetime.fromisoformat(last["timestamp"])
-                now = datetime.now(timezone.utc)
-                if (now - last_t).total_seconds() < 2:
-                    return
-            except: pass
+    # Dedup robusto: ignora si el mismo valor ya se registró en los últimos 5 segundos
+    # (cubre crashX + roundChartInfo que llegan casi simultáneos con el mismo valor)
+    now = datetime.now(timezone.utc)
+    for prev in reversed(crashes.get(bm_id, [])[-5:]):
+        try:
+            prev_t = datetime.fromisoformat(prev["timestamp"])
+            if (now - prev_t).total_seconds() > 5:
+                break
+            if round(prev["multiplier"], 2) == round(multiplier, 2):
+                log.debug("[%s] Dedup skip %.2fx (already recorded)", bm_name, multiplier)
+                return
+        except:
+            pass
 
     entry = {
         "multiplier": multiplier,
