@@ -27,7 +27,8 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 # Stores
 # ---------------------------------------------------------------------------
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+CONFIG_PATH   = os.path.join(os.path.dirname(__file__), "config.json")
+CRASHES_PATH  = os.path.join(os.path.dirname(__file__), "crashes.json")
 bookmakers: dict = {}
 crashes: dict = defaultdict(list)
 ws_connections: dict = {}
@@ -53,6 +54,17 @@ def _load_config():
             return
         except Exception as e:
             log.error("Failed to load from BOOKMAKERS_JSON env var: %s", e)
+
+    # 1b. Cargar crashes desde crashes.json si existe (persiste entre reinicios)
+    if os.path.exists(CRASHES_PATH):
+        try:
+            with open(CRASHES_PATH) as f:
+                saved = json.load(f)
+            for k, v in saved.items():
+                crashes[k] = v
+            log.info("Loaded crashes from crashes.json (%d bookmakers)", len(saved))
+        except Exception as e:
+            log.error("crashes.json load fail: %s", e)
 
     # 2. Fallback: archivo local config.json (desarrollo local / primer deploy)
     if os.path.exists(CONFIG_PATH):
@@ -80,6 +92,16 @@ def _save_config():
                       f, indent=2, default=str)
     except Exception as e:
         log.error("Save fail: %s", e)
+
+def _save_crashes():
+    """Guarda solo crashes en crashes.json — se llama en cada registro."""
+    try:
+        with open(CRASHES_PATH, "w") as f:
+            # Solo últimos 30 por bookmaker para no crecer indefinidamente
+            slim = {k: v[-30:] for k, v in crashes.items()}
+            json.dump(slim, f, default=str)
+    except Exception as e:
+        log.error("crashes.json save fail: %s", e)
 
 # ---------------------------------------------------------------------------
 # SFS2X Decoder
@@ -746,7 +768,9 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
         try: q.put_nowait(entry)
         except: pass
     log.info("[%s] ★★★ CRASH RECORDED: %.2fx ★★★", bm_name, multiplier)
-    if len(crashes[bm_id]) % 5 == 0:
+    # Guardar crashes inmediatamente en archivo separado (sobrevive reinicios)
+    _save_crashes()
+    if len(crashes[bm_id]) % 10 == 0:
         _save_config()
 
 def _stop_ws(bm_id):
