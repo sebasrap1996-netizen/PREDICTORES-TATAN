@@ -204,8 +204,8 @@ GAME_KEYS = {
     "coefficient", "crashValue", "endK", "bust",
     "coef", "coeff",
     "crashMultiplier", "finalMultiplier", "roundResult",
-    "crashX",        # Spribe: último tick ext:x cuando crashea (valor real del crash)
-    "maxMultiplier", # Spribe: roundChartInfo confirma el crash value
+    "maxMultiplier", # Spribe: roundChartInfo — fuente única del crash value
+    # crashX removido: viene del comando "x" (tick) y causa duplicados
 }
 
 GAME_COMMANDS = {
@@ -221,8 +221,7 @@ GAME_COMMANDS = {
 }
 
 TICK_COMMANDS = {
-    # "x" removed — ext:x can carry crashX (crash value), handled in extract_game_mults
-    "X",
+    "x", "X",          # ticks en vuelo — ignorar siempre
     "tick", "update",
     "updateCurrentCashOuts", "currentCashOuts", "cashouts",
     "B", "T", "S",
@@ -283,30 +282,29 @@ def classify_frame(obj):
 # ---------------------------------------------------------------------------
 
 def extract_game_mults(obj, label=""):
+    """
+    Retorna (list_of_multipliers, round_id_or_None).
+    round_id viene de roundChartInfo.roundId — clave de dedup definitiva.
+    """
     if not isinstance(obj, dict):
-        return []
+        return [], None
 
     p = obj.get("p")
     if not isinstance(p, dict):
-        return []
+        return [], None
 
     inner_p = p.get("p")
     cmd = p.get("c", "")
 
+    # Ignorar SIEMPRE los ticks en vuelo.
+    # El crash real llega en roundChartInfo (maxMultiplier + roundId).
     if isinstance(cmd, str) and cmd.lower() in {c.lower() for c in TICK_COMMANDS}:
-        # Excepción: el comando "x" con "crashX" presente es el evento de crash real
-        inner_p_check = p.get("p") if isinstance(p, dict) else None
-        has_crash_x = isinstance(inner_p_check, dict) and "crashX" in inner_p_check
-        if not has_crash_x:
-            return []
-        # Si tiene crashX, continuar para extraerlo
+        return [], None
 
-    # ext:x is a live tick — skip UNLESS it carries "crashX" (crash moment)
-    if isinstance(cmd, str) and cmd.lower() == "x":
-        inner = p.get("p", {}) if isinstance(p, dict) else {}
-        if not isinstance(inner, dict) or "crashX" not in inner:
-            return []  # pure tick, ignore
-        # has crashX — fall through and extract it
+    # Extraer roundId si está disponible (viene en roundChartInfo)
+    round_id = None
+    if isinstance(inner_p, dict):
+        round_id = inner_p.get("roundId")
 
     results = []
 
@@ -328,7 +326,7 @@ def extract_game_mults(obj, label=""):
     if not results:
         results.extend(_scan_game_obj(obj, label, cmd))
 
-    return results
+    return results, round_id
 
 
 def _scan_game_obj(obj, label="", cmd="", depth=0):
@@ -411,7 +409,7 @@ def process_binary(raw, bm_id, bm_name, decoder_type):
             log.info("[%s] SFS2X(%s) → %s (game=%s): %s",
                      label, method, ftype, is_game, _sj(parsed)[:600])
             if is_game:
-                mults = extract_game_mults(parsed, label)
+                mults, _ = extract_game_mults(parsed, label)
             else:
                 log.debug("[%s] Skipping non-game frame: %s", label, ftype)
 
@@ -426,7 +424,7 @@ def process_binary(raw, bm_id, bm_name, decoder_type):
                     ftype, is_game = classify_frame(obj)
                     dbg["frame_type"] = ftype
                     if is_game:
-                        mults = extract_game_mults(obj, label)
+                        mults, _ = extract_game_mults(obj, label)
                     if mults: break
             except: continue
 
@@ -440,7 +438,7 @@ def process_binary(raw, bm_id, bm_name, decoder_type):
                         if isinstance(obj, dict):
                             ftype, is_game = classify_frame(obj)
                             if is_game:
-                                ms = extract_game_mults(obj, label)
+                                ms, _ = extract_game_mults(obj, label)
                                 if ms:
                                     dbg["method"] = "json_embed"
                                     dbg["frame_type"] = ftype
@@ -475,7 +473,7 @@ def process_text(text, bm_id, bm_name):
             ftype, is_game = classify_frame(obj)
             dbg["frame_type"] = ftype
             if is_game:
-                mults = extract_game_mults(obj, label)
+                mults, _ = extract_game_mults(obj, label)
         log.info("[%s] JSON: %s", label, _sj(obj)[:600])
     except: pass
 
@@ -488,7 +486,7 @@ def process_text(text, bm_id, bm_name):
                 if isinstance(obj, dict):
                     ftype, is_game = classify_frame(obj)
                     if is_game:
-                        ms = extract_game_mults(obj, label)
+                        ms, _ = extract_game_mults(obj, label)
                         if ms: mults.extend(ms)
             except: continue
 
@@ -522,12 +520,22 @@ def _b64_to_bytes(s):
     try: return base64.b64decode(s)
     except: return b""
 
+# Generación activa por bookmaker — evita doble-registro cuando hay reconexión
+ws_generation: dict = {}
+
 def _start_ws(bm_id):
     bm = bookmakers.get(bm_id)
     if not bm: return
     ws_url = bm.get("ws_url", "").strip()
     if not ws_url:
         connection_status[bm_id] = "error"; return
+
+    # Cerrar conexión anterior si existe
+    _stop_ws(bm_id)
+
+    # Nueva generación — el hilo anterior la detectará y se descartará
+    gen = ws_generation.get(bm_id, 0) + 1
+    ws_generation[bm_id] = gen
 
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
@@ -567,7 +575,7 @@ def _start_ws(bm_id):
                      name, stats["recv_txt"], len(message), message[:500])
             mults = process_text(message, bm_id, name)
             for m in mults:
-                _record_crash(bm_id, name, m)
+                _record_crash(bm_id, name, m)  # text frames sin roundId
             return
 
         stats["recv_bin"] += 1
@@ -610,10 +618,10 @@ def _start_ws(bm_id):
             time.sleep(0.3)
             send_msg(ws, msg3, 3, "Extension:currentBets")
             if is_game and parsed:
-                mults = extract_game_mults(parsed, name)
+                mults, rid = extract_game_mults(parsed, name)
                 dbg["mults"] = mults
                 for m in mults:
-                    _record_crash(bm_id, name, m)
+                    _record_crash(bm_id, name, m, rid)
 
         elif step == "wait_login_resp" and "ext" in ftype:
             log.info("[%s] ✓ Got extension before explicit login resp, auth seems ok", name)
@@ -624,16 +632,20 @@ def _start_ws(bm_id):
                 time.sleep(0.3)
                 send_msg(ws, msg3, 3, "Extension:currentBets")
             if is_game:
-                mults = extract_game_mults(parsed, name)
+                mults, rid = extract_game_mults(parsed, name)
                 dbg["mults"] = mults
                 for m in mults:
-                    _record_crash(bm_id, name, m)
+                    _record_crash(bm_id, name, m, rid)
 
         elif auth_state["step"] == "authenticated" and is_game:
-            mults = extract_game_mults(parsed, name)
+            # Verificar que este hilo sigue siendo el activo antes de registrar
+            if ws_generation.get(bm_id) != gen:
+                log.debug("[%s] Stale thread (gen %d != %d), discarding frame", name, gen, ws_generation.get(bm_id))
+                return
+            mults, rid = extract_game_mults(parsed, name)
             dbg["mults"] = mults
             for m in mults:
-                _record_crash(bm_id, name, m)
+                _record_crash(bm_id, name, m, rid)
 
         elif auth_state["step"] == "authenticated":
             # Frame llegó pero no fue clasificado como game data.
@@ -642,13 +654,13 @@ def _start_ws(bm_id):
                 log.info("[%s] UNKNOWN post-auth frame: ftype=%s decoded=%s",
                          name, ftype, _sj(parsed)[:800])
                 # Intentar extracción directa — puede ser game data con estructura no estándar
-                mults = extract_game_mults(parsed, name)
+                mults, rid = extract_game_mults(parsed, name)
                 if not mults:
                     mults = _scan_game_obj(parsed, name, "", 0)
                 dbg["mults"] = mults
                 for m in mults:
                     log.info("[%s] ★ CRASH from unknown frame: %.2fx", name, m)
-                    _record_crash(bm_id, name, m)
+                    _record_crash(bm_id, name, m, rid)
             else:
                 log.info("[%s] Undecoded post-auth frame: hex=%s",
                          name, message[:30].hex() if isinstance(message, bytes) else "txt")
@@ -675,10 +687,13 @@ def _start_ws(bm_id):
                  auth_state["handshake_done"], auth_state["login_done"], auth_state["step"],
                  stats["sent"], stats["recv_bin"], stats["recv_txt"])
         connection_status[bm_id] = "disconnected"
-        if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
+        # Solo reconectar si este hilo sigue siendo el activo
+        if ws_generation.get(bm_id) == gen and bm_id in bookmakers and bookmakers[bm_id].get("active", False):
             log.info("[%s] Reconnect in 5s...", name)
             time.sleep(5)
             _start_ws(bm_id)
+        else:
+            log.debug("[%s] on_close: stale gen %d, skip reconnect", name, gen)
 
     ws_app = websocket.WebSocketApp(
         ws_url, on_open=on_open, on_message=on_message,
@@ -691,26 +706,39 @@ def _start_ws(bm_id):
     ws_threads[bm_id] = t
 
 
-def _record_crash(bm_id, bm_name, multiplier):
-    # Dedup robusto: ignora si el mismo valor ya se registró en los últimos 5 segundos
-    # (cubre crashX + roundChartInfo que llegan casi simultáneos con el mismo valor)
+def _record_crash(bm_id, bm_name, multiplier, round_id=None):
+    """
+    Registra un crash. Dedup por round_id (si viene) o por valor+tiempo.
+    round_id viene de roundChartInfo — garantiza exactamente 1 registro por ronda.
+    """
     now = datetime.now(timezone.utc)
+
+    # Dedup primario: por round_id exacto
+    if round_id is not None:
+        for prev in reversed(crashes.get(bm_id, [])[-20:]):
+            if prev.get("round_id") == round_id:
+                log.debug("[%s] Dedup skip roundId=%s (already recorded)", bm_name, round_id)
+                return
+
+    # Dedup secundario: mismo valor en últimos 3 segundos
     for prev in reversed(crashes.get(bm_id, [])[-5:]):
         try:
             prev_t = datetime.fromisoformat(prev["timestamp"])
-            if (now - prev_t).total_seconds() > 5:
+            if (now - prev_t).total_seconds() > 3:
                 break
             if round(prev["multiplier"], 2) == round(multiplier, 2):
-                log.debug("[%s] Dedup skip %.2fx (already recorded)", bm_name, multiplier)
+                log.debug("[%s] Dedup skip %.2fx within 3s", bm_name, multiplier)
                 return
         except:
             pass
 
     entry = {
         "multiplier": multiplier,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": now.isoformat(),
         "id": str(uuid.uuid4())[:8],
     }
+    if round_id is not None:
+        entry["round_id"] = round_id
     crashes[bm_id].append(entry)
     if len(crashes[bm_id]) > MAX_CRASHES:
         crashes[bm_id] = crashes[bm_id][-MAX_CRASHES:]
