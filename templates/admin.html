@@ -542,7 +542,8 @@ async function openCrashViewer(id, name) {
   const container = document.getElementById('crashesContainer');
   container.innerHTML = '';
   if (existing) {
-    existing.forEach(c => appendCrash(c));
+    // Invertir para que el más reciente quede arriba al hacer prepend
+    [...existing].reverse().forEach(c => appendCrash(c));
   }
 
   // SSE stream
@@ -551,6 +552,9 @@ async function openCrashViewer(id, name) {
     try {
       const crash = JSON.parse(e.data);
       appendCrash(crash);
+      // Scroll al tope para ver el crash más reciente
+      const panel = document.getElementById('crashesContainer');
+      panel.scrollTop = 0;
       // Auto-refresh table count
       loadBm();
     } catch (err) {}
