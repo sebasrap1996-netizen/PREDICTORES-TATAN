@@ -531,37 +531,59 @@ async function deleteBm(id, name) {
 }
 
 // --- Crash Viewer with SSE ---
+const shownIds = new Set(); // IDs ya mostrados — persiste aunque se cierre el viewer
+
 async function openCrashViewer(id, name) {
   closeCrashViewer();
   currentViewerId = id;
   document.getElementById('viewerName').textContent = name;
   document.getElementById('crashViewer').style.display = '';
 
-  // Load existing crashes
-  const existing = await apiFetch(`${API}/${id}/crashes?limit=200`);
+  // Cargar últimos 30 crashes del servidor
+  // El API los devuelve del más antiguo al más nuevo.
+  // appendCrash usa prepend → iterar en orden normal deja el más reciente arriba.
+  const existing = await apiFetch(`${API}/${id}/crashes?limit=30`);
   const container = document.getElementById('crashesContainer');
   container.innerHTML = '';
-  if (existing) {
-    // Invertir para que el más reciente quede arriba al hacer prepend
-    [...existing].reverse().forEach(c => appendCrash(c));
+  shownIds.clear();
+
+  if (existing && existing.length > 0) {
+    // Iterar del más antiguo al más nuevo: prepend pone cada uno encima del anterior.
+    // Resultado: el más reciente queda en la posición más alta.
+    existing.forEach(c => {
+      shownIds.add(c.id);
+      appendCrash(c);
+    });
   }
 
-  // SSE stream
-  sseSource = new EventSource(`${API}/${id}/crashes/stream`);
-  sseSource.onmessage = (e) => {
-    try {
-      const crash = JSON.parse(e.data);
-      appendCrash(crash);
-      // Scroll al tope para ver el crash más reciente
-      const panel = document.getElementById('crashesContainer');
-      panel.scrollTop = 0;
-      // Auto-refresh table count
-      loadBm();
-    } catch (err) {}
-  };
-  sseSource.onerror = () => {
-    console.warn('SSE error, reconnecting...');
-  };
+  // Reconectar SSE — se reconecta automáticamente si la conexión cae
+  function connectSSE() {
+    if (sseSource) { sseSource.close(); sseSource = null; }
+    sseSource = new EventSource(`${API}/${id}/crashes/stream`);
+
+    sseSource.onmessage = (e) => {
+      try {
+        const crash = JSON.parse(e.data);
+        if (shownIds.has(crash.id)) return; // dedup
+        shownIds.add(crash.id);
+        appendCrash(crash);
+        // Mantener solo 30 visibles — borrar el más viejo (último del DOM)
+        while (container.children.length > 30) container.lastChild.remove();
+        // Scroll al tope
+        container.scrollTop = 0;
+        loadBm();
+      } catch (err) {}
+    };
+
+    sseSource.onerror = () => {
+      // Reconectar en 3s si se cae la conexión SSE
+      if (currentViewerId === id) {
+        setTimeout(connectSSE, 3000);
+      }
+    };
+  }
+
+  connectSSE();
 }
 
 function appendCrash(c) {
@@ -574,10 +596,8 @@ function appendCrash(c) {
   else if (m >= 2) cls = 'crash-mid';
   el.className = `crash-entry ${cls}`;
   el.textContent = `${m}x`;
-  el.title = c.timestamp || '';
+  el.title = new Date(c.timestamp).toLocaleTimeString() || '';
   container.prepend(el);
-  // Keep max 300 visible
-  while (container.children.length > 300) container.lastChild.remove();
 }
 
 function closeCrashViewer() {
