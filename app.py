@@ -134,8 +134,8 @@ class SFS2XDecoder:
 
 def _try_sfs_decode(raw):
     payloads = [("raw", raw)]
-    try: payloads.append(("zlib", zlib.decompress(raw)))
-    except: pass
+
+    # --- Header 0x80: SFS2X standard frame ---
     if raw and raw[0] == 0x80:
         off = 1
         if len(raw) > off + 1:
@@ -144,8 +144,38 @@ def _try_sfs_decode(raw):
             payloads.append(("sfs_hdr", raw[off:]))
             try: payloads.append(("sfs_hdr_zlib", zlib.decompress(raw[off:])))
             except: pass
+
+    # --- Header 0xa0: Spribe compressed frame (crash/state data) ---
+    # Format: a0 XX YY [zlib data starting with 78 9c ...]
+    # Seen in logs as: a00330789c..., a00411789c..., a0044a789c...
+    if raw and raw[0] == 0xa0 and len(raw) > 3:
+        # Try skipping 3-byte header (a0 + 2 size bytes) → zlib payload
+        candidate = raw[3:]
+        try:
+            payloads.append(("a0_hdr_zlib", zlib.decompress(candidate)))
+        except: pass
+        # Also try 4-byte header in case size is 3 bytes
+        if len(raw) > 4:
+            candidate4 = raw[4:]
+            try:
+                payloads.append(("a0_hdr4_zlib", zlib.decompress(candidate4)))
+            except: pass
+
+    # --- Generic zlib attempt ---
+    try: payloads.append(("zlib", zlib.decompress(raw)))
+    except: pass
+
+    # --- Find zlib magic bytes (78 9c or 78 da) anywhere in frame ---
+    for i in range(1, min(16, len(raw) - 2)):
+        if raw[i] == 0x78 and raw[i+1] in (0x9c, 0xda, 0x01, 0x5e):
+            try:
+                payloads.append((f"zlib_at{i}", zlib.decompress(raw[i:])))
+            except: pass
+
+    # --- Byte skips (small headers) ---
     for skip in range(1, min(9, len(raw))):
         payloads.append((f"skip{skip}", raw[skip:]))
+
     for label, data in payloads:
         if len(data) < 2: continue
         try:
@@ -587,7 +617,22 @@ def _start_ws(bm_id):
                 _record_crash(bm_id, name, m)
 
         elif auth_state["step"] == "authenticated":
-            log.debug("[%s] Non-game frame post-auth: %s", name, ftype)
+            # Frame llegó pero no fue clasificado como game data.
+            # Loguearlo para identificar el comando real de crash del servidor.
+            if parsed:
+                log.info("[%s] UNKNOWN post-auth frame: ftype=%s decoded=%s",
+                         name, ftype, _sj(parsed)[:800])
+                # Intentar extracción directa — puede ser game data con estructura no estándar
+                mults = extract_game_mults(parsed, name)
+                if not mults:
+                    mults = _scan_game_obj(parsed, name, "", 0)
+                dbg["mults"] = mults
+                for m in mults:
+                    log.info("[%s] ★ CRASH from unknown frame: %.2fx", name, m)
+                    _record_crash(bm_id, name, m)
+            else:
+                log.info("[%s] Undecoded post-auth frame: hex=%s",
+                         name, message[:30].hex() if isinstance(message, bytes) else "txt")
 
         else:
             if not auth_state["handshake_done"] and ftype != "handshake_resp":
