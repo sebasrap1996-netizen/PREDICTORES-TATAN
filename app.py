@@ -195,6 +195,8 @@ PROTOCOL_KEYS = {
     "zn", "un", "pw",
     "rn", "ri", "rc", "uc", "id",
     "xt", "pi",
+    # cashout list keys — multiplier inside these is a player cashout, NOT a crash
+    "cashouts", "openBetsCount", "winAmount", "betId", "player_id",
 }
 
 GAME_KEYS = {
@@ -202,6 +204,8 @@ GAME_KEYS = {
     "coefficient", "crashValue", "endK", "bust",
     "coef", "coeff",
     "crashMultiplier", "finalMultiplier", "roundResult",
+    "crashX",        # Spribe: último tick ext:x cuando crashea (valor real del crash)
+    "maxMultiplier", # Spribe: roundChartInfo confirma el crash value
 }
 
 GAME_COMMANDS = {
@@ -213,12 +217,14 @@ GAME_COMMANDS = {
     "crash",
     "roundEnd", "roundend",
     "gameend", "gameEnd",
+    "roundChartInfo",      # Spribe crash result (maxMultiplier = crash value)
 }
 
 TICK_COMMANDS = {
-    "x", "X",
+    # "x" removed — ext:x can carry crashX (crash value), handled in extract_game_mults
+    "X",
     "tick", "update",
-    "updateCurrentCashOuts", "currentCashOuts",
+    "updateCurrentCashOuts", "currentCashOuts", "cashouts",
     "B", "T", "S",
 }
 
@@ -288,7 +294,19 @@ def extract_game_mults(obj, label=""):
     cmd = p.get("c", "")
 
     if isinstance(cmd, str) and cmd.lower() in {c.lower() for c in TICK_COMMANDS}:
-        return []
+        # Excepción: el comando "x" con "crashX" presente es el evento de crash real
+        inner_p_check = p.get("p") if isinstance(p, dict) else None
+        has_crash_x = isinstance(inner_p_check, dict) and "crashX" in inner_p_check
+        if not has_crash_x:
+            return []
+        # Si tiene crashX, continuar para extraerlo
+
+    # ext:x is a live tick — skip UNLESS it carries "crashX" (crash moment)
+    if isinstance(cmd, str) and cmd.lower() == "x":
+        inner = p.get("p", {}) if isinstance(p, dict) else {}
+        if not isinstance(inner, dict) or "crashX" not in inner:
+            return []  # pure tick, ignore
+        # has crashX — fall through and extract it
 
     results = []
 
@@ -326,6 +344,7 @@ def _scan_game_obj(obj, label="", cmd="", depth=0):
             X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
                              "crashValue", "endK", "crashMultiplier",
                              "finalMultiplier", "coefficient"}
+            # crashX and maxMultiplier are already floats (e.g. 1.0 = 1.00x) — never divide
             if key in X100_INT_KEYS and isinstance(val, int):
                 if val < 100:
                     continue
