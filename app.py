@@ -204,8 +204,8 @@ GAME_KEYS = {
     "coefficient", "crashValue", "endK", "bust",
     "coef", "coeff",
     "crashMultiplier", "finalMultiplier", "roundResult",
-    "maxMultiplier", # Spribe: roundChartInfo — fuente única del crash value
-    # crashX removido: viene del comando "x" (tick) y causa duplicados
+    "maxMultiplier", # Spribe: roundChartInfo confirma crash value + roundId
+    "crashX",        # Spribe: ext:x con crashX = crash INSTANTÁNEO (captura inmediata)
 }
 
 GAME_COMMANDS = {
@@ -296,12 +296,15 @@ def extract_game_mults(obj, label=""):
     inner_p = p.get("p")
     cmd = p.get("c", "")
 
-    # Ignorar SIEMPRE los ticks en vuelo.
-    # El crash real llega en roundChartInfo (maxMultiplier + roundId).
+    # Filtrar ticks en vuelo (x subiendo: 1.01x, 1.02x...)
+    # EXCEPCIÓN: ext:x con "crashX" = el avión acaba de caer → capturar INMEDIATAMENTE
     if isinstance(cmd, str) and cmd.lower() in {c.lower() for c in TICK_COMMANDS}:
-        return [], None
+        has_crash_x = isinstance(inner_p, dict) and "crashX" in inner_p
+        if not has_crash_x:
+            return [], None
+        # tiene crashX → es el crash real, continuar
 
-    # Extraer roundId si está disponible (viene en roundChartInfo)
+    # Extraer roundId si está disponible (viene en roundChartInfo o en ext:x con crashX)
     round_id = None
     if isinstance(inner_p, dict):
         round_id = inner_p.get("roundId")
@@ -715,46 +718,66 @@ def _start_ws(bm_id):
 
 def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     """
-    Registra un crash. Dedup por round_id (si viene) o por valor+tiempo.
-    round_id viene de roundChartInfo — garantiza exactamente 1 registro por ronda.
+    Registra crash. Estrategia:
+    - crashX (sin round_id): registra INMEDIATAMENTE para captura instantánea.
+    - roundChartInfo (con round_id): si el mismo valor ya fue registrado en los
+      últimos 10s → solo añade round_id al entry existente (sin duplicar ni
+      enviar SSE de nuevo). Si no existe → registra normalmente.
     """
     now = datetime.now(timezone.utc)
+    mult = round(float(multiplier), 2)
 
-    # Dedup primario: por round_id exacto
+    # Dedup por round_id exacto (roundChartInfo ya registrado)
     if round_id is not None:
-        for prev in reversed(crashes.get(bm_id, [])[-20:]):
+        for prev in reversed(crashes.get(bm_id, [])[-30:]):
             if prev.get("round_id") == round_id:
-                log.debug("[%s] Dedup skip roundId=%s (already recorded)", bm_name, round_id)
+                log.debug("[%s] Dedup: roundId=%s ya existe", bm_name, round_id)
                 return
 
-    # Dedup secundario: mismo valor en últimos 3 segundos
-    for prev in reversed(crashes.get(bm_id, [])[-5:]):
+    # Si llega roundChartInfo y ya hay un entry con el mismo valor en últimos 10s
+    # (capturado vía crashX), solo actualizar el round_id sin duplicar
+    if round_id is not None:
+        for prev in reversed(crashes.get(bm_id, [])[-5:]):
+            try:
+                prev_t = datetime.fromisoformat(prev["timestamp"])
+                if (now - prev_t).total_seconds() > 10:
+                    break
+                if round(float(prev["multiplier"]), 2) == mult and prev.get("round_id") is None:
+                    prev["round_id"] = round_id
+                    log.debug("[%s] Dedup: roundChartInfo %.2fx enriquece entry crashX", bm_name, mult)
+                    return
+            except:
+                pass
+
+    # Dedup final: mismo valor en últimos 2s solamente
+    for prev in reversed(crashes.get(bm_id, [])[-3:]):
         try:
             prev_t = datetime.fromisoformat(prev["timestamp"])
-            if (now - prev_t).total_seconds() > 3:
+            if (now - prev_t).total_seconds() > 2:
                 break
-            if round(prev["multiplier"], 2) == round(multiplier, 2):
-                log.debug("[%s] Dedup skip %.2fx within 3s", bm_name, multiplier)
+            if round(float(prev["multiplier"]), 2) == mult:
+                log.debug("[%s] Dedup: %.2fx ya registrado en <2s", bm_name, mult)
                 return
         except:
             pass
 
     entry = {
-        "multiplier": multiplier,
+        "multiplier": mult,
         "timestamp": now.isoformat(),
         "id": str(uuid.uuid4())[:8],
     }
     if round_id is not None:
         entry["round_id"] = round_id
+
     crashes[bm_id].append(entry)
     if len(crashes[bm_id]) > MAX_CRASHES:
         crashes[bm_id] = crashes[bm_id][-MAX_CRASHES:]
     for q in sse_subscribers.get(bm_id, []):
         try: q.put_nowait(entry)
         except: pass
-    log.info("[%s] ★★★ CRASH RECORDED: %.2fx ★★★", bm_name, multiplier)
-    if len(crashes[bm_id]) % 10 == 0:
-        _save_config()
+    log.info("[%s] ★★★ CRASH RECORDED: %.2fx (round_id=%s) ★★★", bm_name, mult, round_id)
+    # Guardar en disco de forma asíncrona para no bloquear SSE
+    threading.Thread(target=_save_crashes, daemon=True).start()
 
 def _stop_ws(bm_id):
     ws = ws_connections.pop(bm_id, None)
@@ -829,21 +852,25 @@ def get_crashes(bid):
 def stream_crashes(bid):
     if bid not in bookmakers: return jsonify({"error": "Not found"}), 404
     q = Queue(maxsize=100); sse_subscribers[bid].append(q)
+    # Enviar los últimos 30 crashes al conectar (para que el cliente tenga estado inicial)
+    initial = crashes.get(bid, [])[-30:]
     def gen():
         try:
-            yield "event: connected\ndata: {}\n\n"
+            # Enviar estado inicial al conectar
+            yield f"event: init\ndata: {json.dumps(initial)}\n\n"
             while True:
                 try:
-                    e = q.get(timeout=30)
+                    e = q.get(timeout=5)   # 5s timeout → heartbeat frecuente
                     yield f"data: {json.dumps(e)}\n\n"
                 except Empty:
-                    yield ": hb\n\n"
+                    yield ": hb\n\n"    # heartbeat cada 5s mantiene conexión viva
         except GeneratorExit: pass
         finally:
             try: sse_subscribers[bid].remove(q)
             except: pass
     return Response(stream_with_context(gen()), mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no",
+                             "Connection":"keep-alive","X-Content-Type-Options":"nosniff"})
 
 @app.route("/api/aviator/bookmakers/<bid>/debug")
 def get_debug(bid):
