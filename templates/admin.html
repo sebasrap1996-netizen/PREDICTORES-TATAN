@@ -386,6 +386,7 @@ tr:hover td { background: var(--bg-card-hover); }
               <th>Estado</th>
               <th>Decoder</th>
               <th>Crashes</th>
+              <th>Último crash</th>
               <th>Rec.</th>
               <th style="text-align:right">Acciones</th>
             </tr>
@@ -696,6 +697,9 @@ async function loadBm() {
       <td style="font-family:var(--font-mono);font-size:12px;">${esc(bm.decoder_type || 'auto')}</td>
       <td>
         <span style="font-family:var(--font-mono);font-weight:600;cursor:pointer;color:var(--gold);" onclick="openCrashViewer('${bm.id}','${esc(bm.name)}')">${bm.crash_count || 0}</span>
+      </td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">
+        ${bm.last_crash_at ? new Date(bm.last_crash_at).toLocaleTimeString('es-CO') : '—'}
       </td>
       <td>${bm.recommended ? '<span class="rec-star">★</span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td style="text-align:right;white-space:nowrap;">
