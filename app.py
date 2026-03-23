@@ -24,6 +24,18 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 
+@app.after_request
+def _add_cors(response):
+    response.headers["Access-Control-Allow-Origin"]  = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+@app.route("/", defaults={"path": ""}, methods=["OPTIONS"])
+@app.route("/<path:path>", methods=["OPTIONS"])
+def _cors_preflight(path):
+    return "", 204
+
 # ---------------------------------------------------------------------------
 # Stores
 # ---------------------------------------------------------------------------
