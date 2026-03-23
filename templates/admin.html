@@ -3,591 +3,319 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PREDICTORES TATAN — Aviator Scraper Admin</title>
+<title>Aviator scraping - Dashboard</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-
-:root {
-  --bg-primary: #0a0a0f;
-  --bg-card: #12121a;
-  --bg-card-hover: #1a1a26;
-  --bg-input: #0e0e16;
-  --border: #1e1e2e;
-  --border-focus: #f59e0b;
-  --gold: #f59e0b;
-  --gold-dim: #b45309;
-  --gold-glow: rgba(245, 158, 11, 0.15);
-  --green: #10b981;
-  --green-dim: rgba(16, 185, 129, 0.15);
-  --red: #ef4444;
-  --red-dim: rgba(239, 68, 68, 0.15);
-  --blue: #3b82f6;
-  --blue-dim: rgba(59, 130, 246, 0.15);
-  --purple: #a78bfa;
-  --purple-dim: rgba(167, 139, 250, 0.15);
-  --text: #e2e8f0;
-  --text-dim: #64748b;
-  --text-muted: #475569;
-  --font-mono: 'JetBrains Mono', monospace;
-  --font-sans: 'Space Grotesk', sans-serif;
-}
-
-* { margin: 0; padding: 0; box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  background: var(--bg-primary);
-  color: var(--text);
-  font-family: var(--font-sans);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #111827;
+  color: #f3f4f6;
   min-height: 100vh;
-  overflow-x: hidden;
+  padding: 24px 16px;
 }
 
-body::before {
-  content: '';
-  position: fixed;
-  top: -50%; left: -50%;
-  width: 200%; height: 200%;
-  background: radial-gradient(ellipse at 30% 20%, rgba(245,158,11,0.03) 0%, transparent 50%),
-              radial-gradient(ellipse at 70% 80%, rgba(59,130,246,0.02) 0%, transparent 50%);
-  animation: drift 30s ease-in-out infinite alternate;
-  z-index: 0;
-  pointer-events: none;
-}
-@keyframes drift { to { transform: translate(5%, 3%) rotate(2deg); } }
+.container { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
 
-.shell { max-width: 1400px; margin: 0 auto; padding: 24px 20px; position: relative; z-index: 1; }
+/* ── Card ── */
+.card { background: #1f2937; border-radius: 12px; padding: 24px; }
 
-/* Header */
-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 0 28px; border-bottom: 1px solid var(--border);
-  margin-bottom: 28px; flex-wrap: wrap; gap: 12px;
-}
-.logo { display: flex; align-items: center; gap: 14px; }
-.logo-icon {
-  width: 44px; height: 44px; border-radius: 12px;
-  background: linear-gradient(135deg, var(--gold), var(--gold-dim));
-  display: grid; place-items: center; font-size: 22px;
-  box-shadow: 0 0 24px var(--gold-glow);
-}
-.logo h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
-.logo h1 span { color: var(--gold); }
-.logo sub { font-size: 11px; color: var(--text-dim); font-weight: 400; letter-spacing: 1px; text-transform: uppercase; }
+/* ── Card header ── */
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.card-header h2 { font-size: 20px; font-weight: 700; color: #f9fafb; }
 
-.health-badge {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 16px; border-radius: 999px;
-  background: var(--green-dim); border: 1px solid rgba(16,185,129,0.3);
-  font-size: 12px; font-weight: 600; color: var(--green);
-  font-family: var(--font-mono);
+/* ── Button Nuevo Bookmaker ── */
+.btn-new {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #2563eb; color: #fff; border: none; border-radius: 8px;
+  padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
 }
-.health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.btn-new:hover { background: #1d4ed8; }
 
-/* Buttons */
-.btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 20px; border-radius: 10px; border: none;
-  font-family: var(--font-sans); font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: all 0.2s;
-}
-.btn-gold {
-  background: linear-gradient(135deg, var(--gold), var(--gold-dim));
-  color: #000; box-shadow: 0 0 20px var(--gold-glow);
-}
-.btn-gold:hover { transform: translateY(-1px); box-shadow: 0 4px 28px var(--gold-glow); }
-.btn-ghost {
-  background: transparent; border: 1px solid var(--border);
-  color: var(--text-dim);
-}
-.btn-ghost:hover { border-color: var(--text-dim); color: var(--text); }
-.btn-red { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
-.btn-red:hover { background: rgba(239,68,68,0.25); }
-.btn-blue { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(59,130,246,0.2); }
-.btn-blue:hover { background: rgba(59,130,246,0.25); }
-.btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
-
-/* Cards */
-.card {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 16px; padding: 24px; margin-bottom: 20px;
-  transition: border-color 0.3s;
-}
-.card:hover { border-color: rgba(245,158,11,0.2); }
-.card-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 20px; flex-wrap: wrap; gap: 10px;
-}
-.card-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
-
-/* Form */
-.form-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
-}
-@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
-.form-group { display: flex; flex-direction: column; gap: 6px; }
-.form-group.full { grid-column: 1 / -1; }
-label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-input, textarea, select {
-  background: var(--bg-input); border: 1px solid var(--border);
-  border-radius: 10px; padding: 10px 14px; color: var(--text);
-  font-family: var(--font-mono); font-size: 13px;
-  transition: border-color 0.2s;
-}
-input:focus, textarea:focus, select:focus {
-  outline: none; border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px var(--gold-glow);
-}
-textarea { resize: vertical; min-height: 42px; }
-select { appearance: none; cursor: pointer; }
-
-.toggle-row { display: flex; align-items: center; gap: 20px; padding-top: 8px; flex-wrap: wrap; }
-.toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
-.toggle input { display: none; }
-.toggle-track {
-  width: 40px; height: 22px; border-radius: 11px;
-  background: var(--border); position: relative; transition: background 0.2s;
-}
-.toggle input:checked + .toggle-track { background: var(--gold); }
-.toggle-track::after {
-  content: ''; position: absolute; top: 3px; left: 3px;
-  width: 16px; height: 16px; border-radius: 50%;
-  background: #fff; transition: transform 0.2s;
-}
-.toggle input:checked + .toggle-track::after { transform: translateX(18px); }
-
-/* Table */
+/* ── Table ── */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th {
-  text-align: left; padding: 12px 16px; font-size: 11px;
-  text-transform: uppercase; letter-spacing: 0.8px;
-  color: var(--text-muted); border-bottom: 1px solid var(--border);
-  font-weight: 600; white-space: nowrap;
-}
-td {
-  padding: 14px 16px; border-bottom: 1px solid var(--border);
-  font-size: 13px; vertical-align: middle;
-}
-tr:hover td { background: var(--bg-card-hover); }
+thead tr { border-bottom: 1px solid #374151; }
+th { text-align: left; padding: 12px 16px; font-size: 13px; font-weight: 600; color: #9ca3af; }
+td { padding: 14px 16px; font-size: 14px; color: #e5e7eb; border-bottom: 1px solid #374151; vertical-align: middle; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: #263040; }
+.td-id { color: #9ca3af; }
+.td-name { font-weight: 700; color: #f9fafb; }
+.td-desc { color: #9ca3af; }
 
-.status-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 600;
-  font-family: var(--font-mono);
-}
-.status-connected { background: var(--green-dim); color: var(--green); }
-.status-disconnected { background: rgba(100,116,139,0.15); color: var(--text-dim); }
-.status-connecting { background: var(--blue-dim); color: var(--blue); }
-.status-error { background: var(--red-dim); color: var(--red); }
+/* ── Badges ── */
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-active   { background: #065f46; color: #6ee7b7; }
+.badge-inactive { background: #374151; color: #9ca3af; }
+.badge-rec      { background: #92400e; color: #fbbf24; }
+.badge-norec    { background: #374151; color: #9ca3af; }
 
-.rec-star { color: var(--gold); font-size: 16px; }
+/* ── Action buttons ── */
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 7px; border: none; cursor: pointer; transition: opacity 0.2s; font-size: 15px; }
+.btn-icon:hover { opacity: 0.8; }
+.btn-edit   { background: #d97706; color: #fff; }
+.btn-delete { background: #dc2626; color: #fff; }
+.actions-cell { display: flex; gap: 8px; align-items: center; }
 
-/* BM Logo img */
-.bm-logo {
-  width: 32px; height: 32px; border-radius: 8px; object-fit: cover;
-  border: 1px solid var(--border); background: var(--bg-input);
-  display: inline-block; vertical-align: middle;
-}
-.bm-logo-placeholder {
-  width: 32px; height: 32px; border-radius: 8px;
-  background: var(--bg-input); border: 1px solid var(--border);
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 16px; vertical-align: middle;
-}
+/* ── Empty state ── */
+.empty-state { text-align: center; padding: 48px 20px; color: #6b7280; font-size: 14px; }
 
-/* Crashes panel */
-.crashes-panel {
-  background: var(--bg-input); border: 1px solid var(--border);
-  border-radius: 12px; padding: 16px; margin-top: 16px;
-  max-height: 320px; overflow-y: auto;
-  font-family: var(--font-mono); font-size: 12px;
-}
-.crash-entry {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 10px; border-radius: 8px; margin: 3px;
-  font-weight: 600;
-}
-.crash-low { background: var(--blue-dim); color: var(--blue); }
-.crash-mid { background: var(--green-dim); color: var(--green); }
-.crash-high { background: var(--gold-glow); color: var(--gold); }
-.crash-mega { background: var(--red-dim); color: var(--red); }
+/* ── API section ── */
+.section-title { font-size: 20px; font-weight: 700; color: #f9fafb; margin-bottom: 20px; }
+.section-sub   { font-size: 16px; font-weight: 700; color: #f3f4f6; margin-bottom: 14px; }
 
-/* API Docs section */
-.api-section { margin-bottom: 20px; }
-.api-endpoints { display: grid; gap: 10px; }
-.api-endpoint {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 16px; border-radius: 10px;
-  background: var(--bg-input); border: 1px solid var(--border);
-  transition: border-color 0.2s;
-}
-.api-endpoint:hover { border-color: rgba(245,158,11,0.2); }
-.method-badge {
-  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
-  padding: 3px 8px; border-radius: 6px; letter-spacing: 0.5px;
-  white-space: nowrap;
-}
-.method-get { background: var(--green-dim); color: var(--green); }
-.method-post { background: var(--blue-dim); color: var(--blue); }
-.method-put { background: var(--gold-glow); color: var(--gold); }
-.method-delete { background: var(--red-dim); color: var(--red); }
-.api-url {
-  font-family: var(--font-mono); font-size: 12px; color: var(--purple);
-  background: var(--purple-dim); padding: 3px 10px; border-radius: 6px;
-  border: 1px solid rgba(167,139,250,0.2);
-}
-.api-desc { font-size: 12px; color: var(--text-dim); flex: 1; }
+.endpoint-item { border-left: 3px solid #2563eb; background: #111827; border-radius: 0 8px 8px 0; padding: 14px 18px; margin-bottom: 10px; }
+.endpoint-top  { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.method-badge  { display: inline-block; padding: 3px 9px; border-radius: 5px; font-size: 12px; font-weight: 700; }
+.m-get    { background: #065f46; color: #6ee7b7; }
+.m-post   { background: #1e3a8a; color: #93c5fd; }
+.m-put    { background: #78350f; color: #fbbf24; }
+.m-delete { background: #7f1d1d; color: #fca5a5; }
+.endpoint-url  { font-family: 'Courier New', monospace; font-size: 13px; color: #a5b4fc; background: #1e2433; padding: 3px 10px; border-radius: 5px; }
+.endpoint-desc { font-size: 13px; color: #9ca3af; }
 
-/* Dynamic URLs section */
-.dynamic-urls { margin-top: 16px; }
-.dynamic-url-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; border-radius: 8px;
-  background: var(--bg-input); border: 1px solid var(--border);
-  margin-bottom: 8px; flex-wrap: wrap; gap: 8px;
-}
-.dynamic-url-bm { font-weight: 600; font-size: 12px; color: var(--gold); min-width: 120px; }
-.dynamic-url-link {
-  font-family: var(--font-mono); font-size: 11px; color: var(--blue);
-  word-break: break-all; flex: 1;
-  text-decoration: none;
-}
-.dynamic-url-link:hover { text-decoration: underline; color: var(--purple); }
+/* ── Dynamic URLs ── */
+.dynamic-section { margin-top: 28px; }
+.dynamic-bm-block { border-left: 3px solid #2563eb; background: #111827; border-radius: 0 8px 8px 0; padding: 14px 18px; margin-bottom: 10px; }
+.dynamic-bm-name  { font-size: 14px; font-weight: 700; color: #f3f4f6; margin-bottom: 10px; }
+.dynamic-url-row  { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dynamic-url-text { font-family: 'Courier New', monospace; font-size: 12px; color: #6b7280; background: #1e2433; padding: 4px 12px; border-radius: 5px; word-break: break-all; flex: 1; }
+.dynamic-url-text a { color: #6b7280; text-decoration: none; }
+.dynamic-url-text a:hover { color: #a5b4fc; }
 
-/* Copy btn */
-.copy-btn {
-  background: transparent; border: 1px solid var(--border);
-  border-radius: 6px; padding: 3px 8px; cursor: pointer;
-  font-size: 11px; color: var(--text-dim); transition: all 0.2s;
-  font-family: var(--font-sans);
-}
-.copy-btn:hover { border-color: var(--gold); color: var(--gold); }
+/* ── Modal ── */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 1000; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; }
+.modal-overlay.active { display: flex; }
+.modal { background: #1f2937; border-radius: 12px; width: 100%; max-width: 600px; padding: 32px; position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.5); margin: auto; }
+.modal-close { position: absolute; top: 18px; right: 20px; background: none; border: none; color: #9ca3af; font-size: 22px; cursor: pointer; }
+.modal-close:hover { color: #f3f4f6; }
+.modal h2 { font-size: 22px; font-weight: 700; margin-bottom: 24px; color: #f9fafb; }
 
-/* Modal overlay */
-.modal-overlay {
-  display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
-  z-index: 1000; place-items: center;
+.form-group { margin-bottom: 18px; }
+.form-group label { display: block; font-size: 14px; font-weight: 600; color: #e5e7eb; margin-bottom: 7px; }
+.form-group input, .form-group textarea, .form-group select {
+  width: 100%; background: #111827; border: 1px solid #374151; border-radius: 8px;
+  padding: 10px 14px; color: #f3f4f6; font-size: 14px; font-family: inherit; transition: border-color 0.2s;
 }
-.modal-overlay.active { display: grid; }
-.modal {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 20px; padding: 32px; width: 95%; max-width: 720px;
-  max-height: 90vh; overflow-y: auto;
-  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
-}
-.modal h2 { font-size: 20px; font-weight: 700; margin-bottom: 24px; }
-.modal h2 span { color: var(--gold); }
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: #2563eb; }
+.form-group textarea { resize: vertical; min-height: 80px; font-family: 'Courier New', monospace; font-size: 13px; }
+.form-group select { cursor: pointer; }
+.form-group input::placeholder, .form-group textarea::placeholder { color: #4b5563; }
 
-/* Image preview */
-.img-preview-wrap { margin-top: 8px; }
-.img-preview {
-  width: 48px; height: 48px; border-radius: 10px;
-  object-fit: cover; border: 1px solid var(--border);
-  display: none;
-}
-.img-preview.visible { display: block; }
+.checks-row { display: flex; gap: 32px; margin-bottom: 18px; align-items: center; }
+.check-label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #e5e7eb; cursor: pointer; }
+.check-label input[type="checkbox"] { width: 18px; height: 18px; accent-color: #2563eb; cursor: pointer; }
 
-/* Toast */
+.modal-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 28px; }
+.btn-cancel { background: #374151; color: #e5e7eb; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-cancel:hover { background: #4b5563; }
+.btn-save { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-save:hover { background: #1d4ed8; }
+
+/* ── Toast ── */
 .toast-container { position: fixed; top: 20px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
-.toast {
-  padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 600;
-  animation: slideIn 0.3s ease-out;
-  font-family: var(--font-sans);
-}
-.toast-success { background: var(--green-dim); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
-.toast-error { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
-.toast-info { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(59,130,246,0.3); }
-@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.toast { padding: 12px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; animation: slideIn 0.25s ease; }
+.toast-success { background: #065f46; color: #6ee7b7; border: 1px solid #047857; }
+.toast-error   { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
+@keyframes slideIn { from { transform: translateX(110%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
-/* Empty state */
-.empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
-.empty-state .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
-.empty-state p { font-size: 14px; }
+/* ── Crashes viewer ── */
+.crashes-viewer { margin-top: 20px; background: #111827; border-radius: 10px; padding: 18px; }
+.crashes-viewer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.crashes-viewer-title { font-size: 15px; font-weight: 700; color: #f3f4f6; display: flex; align-items: center; gap: 8px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; animation: blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.crashes-container { display: flex; flex-wrap: wrap; gap: 6px; min-height: 40px; }
+.crash-chip { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; font-family: 'Courier New', monospace; }
+.crash-low  { background: #1e3a8a; color: #93c5fd; }
+.crash-mid  { background: #065f46; color: #6ee7b7; }
+.crash-high { background: #78350f; color: #fbbf24; }
+.crash-mega { background: #7f1d1d; color: #fca5a5; }
+.btn-close-sm { background: #374151; color: #9ca3af; border: none; border-radius: 6px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.btn-close-sm:hover { background: #4b5563; color: #f3f4f6; }
 
-/* Crash viewer */
-.viewer-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; animation: pulse 1s infinite; margin-right: 6px; }
+/* ── Debug panel ── */
+.debug-panel { margin-top: 20px; background: #111827; border-radius: 10px; padding: 18px; }
+.debug-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+.debug-title  { font-size: 15px; font-weight: 700; color: #f3f4f6; }
+.debug-status { font-size: 11px; color: #6b7280; margin-top: 3px; }
+.debug-container { max-height: 480px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.6; }
+.debug-btns { display: flex; gap: 8px; }
 
-/* Section tabs */
-.section-tabs {
-  display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
-}
-.section-tab {
-  padding: 8px 18px; border-radius: 10px; border: 1px solid var(--border);
-  font-size: 13px; font-weight: 600; cursor: pointer;
-  background: transparent; color: var(--text-dim); transition: all 0.2s;
-  font-family: var(--font-sans);
-}
-.section-tab.active {
-  background: var(--gold-glow); border-color: rgba(245,158,11,0.4);
-  color: var(--gold);
-}
-.section-tab:hover:not(.active) { border-color: var(--text-dim); color: var(--text); }
-
-.section-content { display: none; }
-.section-content.active { display: block; }
-
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
 </style>
 </head>
 <body>
+<div class="container">
 
-<div class="shell">
-  <!-- Header -->
-  <header>
-    <div class="logo">
-      <div class="logo-icon">🛩️</div>
-      <div>
-        <h1>PREDICTORES <span>TATAN</span></h1>
-        <sub>Aviator Scraper Manager</sub>
-      </div>
+  <!-- ── Gestión de Bookmakers ── -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Gestión de Bookmakers</h2>
+      <button class="btn-new" onclick="openModal()">＋ Nuevo Bookmaker</button>
     </div>
-    <div class="health-badge" id="healthBadge">
-      <div class="health-dot"></div>
-      <span id="healthText">Cargando...</span>
-    </div>
-  </header>
-
-  <!-- Section Tabs -->
-  <div class="section-tabs">
-    <button class="section-tab active" onclick="switchTab('bookmakers')">🛩️ Bookmakers</button>
-    <button class="section-tab" onclick="switchTab('api')">📡 API & Endpoints</button>
-  </div>
-
-  <!-- === TAB: BOOKMAKERS === -->
-  <div id="tab-bookmakers" class="section-content active">
-    <!-- Toolbar -->
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
-      <div style="font-size:14px; color:var(--text-dim);" id="bmCount">0 bookmakers</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button class="btn btn-ghost" onclick="exportConfig()" title="Exportar config para Render">📋 Exportar Config</button>
-        <button class="btn btn-gold" onclick="openModal()">
-          <span>＋</span> Nuevo Bookmaker
-        </button>
-      </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Nombre</th>
+            <th>Descripción</th>
+            <th>Estado</th>
+            <th>Recomendado</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="bmTableBody"></tbody>
+      </table>
+      <div class="empty-state" id="emptyState">Cargando...</div>
     </div>
 
-    <!-- Bookmakers Table -->
-    <div class="card" id="tableCard">
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th></th>
-              <th>ID</th>
-              <th>Nombre</th>
-              <th>Descripción</th>
-              <th>Estado</th>
-              <th>Decoder</th>
-              <th>Crashes</th>
-              <th>Último crash</th>
-              <th>Rec.</th>
-              <th style="text-align:right">Acciones</th>
-            </tr>
-          </thead>
-          <tbody id="bmTableBody">
-          </tbody>
-        </table>
+    <!-- Crashes viewer -->
+    <div id="crashViewer" class="crashes-viewer" style="display:none;">
+      <div class="crashes-viewer-header">
+        <div class="crashes-viewer-title">
+          <span class="live-dot"></span>
+          Crashes en vivo — <span id="viewerName" style="color:#fbbf24;"></span>
+        </div>
+        <button class="btn-close-sm" onclick="closeCrashViewer()">Cerrar</button>
       </div>
-      <div class="empty-state" id="emptyState">
-        <div class="icon">🛩️</div>
-        <p>Sin bookmakers. Agrega uno para empezar a capturar.</p>
-      </div>
+      <div class="crashes-container" id="crashesContainer"></div>
     </div>
 
-    <!-- Live Crash Viewer -->
-    <div class="card" id="crashViewer" style="display:none;">
-      <div class="viewer-header">
+    <!-- Debug panel -->
+    <div id="debugPanel" class="debug-panel" style="display:none;">
+      <div class="debug-header">
         <div>
-          <span class="card-title"><span class="live-dot"></span> Crashes en vivo — <span id="viewerName"></span></span>
+          <div class="debug-title">🔍 Debug — <span id="debugName"></span></div>
+          <div class="debug-status" id="debugStatus"></div>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="closeCrashViewer()">Cerrar</button>
-      </div>
-      <div class="crashes-panel" id="crashesContainer"></div>
-    </div>
-
-    <!-- Debug Frame Viewer -->
-    <div class="card" id="debugPanel" style="display:none;">
-      <div class="viewer-header">
-        <div>
-          <span class="card-title">🔍 Debug Frames — <span id="debugName"></span></span>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;" id="debugStatus"></div>
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button class="btn btn-ghost btn-sm" onclick="refreshDebug()">Refrescar</button>
-          <button class="btn btn-ghost btn-sm" onclick="closeDebug()">Cerrar</button>
+        <div class="debug-btns">
+          <button class="btn-close-sm" onclick="refreshDebug()">Refrescar</button>
+          <button class="btn-close-sm" onclick="closeDebug()">Cerrar</button>
         </div>
       </div>
-      <div class="crashes-panel" id="debugContainer" style="max-height:500px;font-size:11px;line-height:1.6;"></div>
+      <div class="debug-container" id="debugContainer"></div>
     </div>
   </div>
 
-  <!-- === TAB: API & ENDPOINTS === -->
-  <div id="tab-api" class="section-content">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📡 Endpoints Disponibles</div>
+  <!-- ── API de Bookmakers ── -->
+  <div class="card">
+    <div class="section-title">API de Bookmakers</div>
+
+    <div class="section-sub">Endpoints Disponibles</div>
+
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-get">GET</span>
+        <span class="endpoint-url">/api/aviator/bookmakers</span>
       </div>
-      <div class="api-endpoints">
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/api/aviator/bookmakers</span>
-          <span class="api-desc">Obtener todos los bookmakers</span>
-          <button class="copy-btn" onclick="copyText('/api/aviator/bookmakers')">Copiar</button>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/api/aviator/bookmakers/:id</span>
-          <span class="api-desc">Obtener un bookmaker específico</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-post">POST</span>
-          <span class="api-url">/api/aviator/bookmakers</span>
-          <span class="api-desc">Crear un nuevo bookmaker</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-put">PUT</span>
-          <span class="api-url">/api/aviator/bookmakers/:id</span>
-          <span class="api-desc">Actualizar un bookmaker existente</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-delete">DELETE</span>
-          <span class="api-url">/api/aviator/bookmakers/:id</span>
-          <span class="api-desc">Eliminar un bookmaker</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/api/aviator/bookmakers/:id/crashes</span>
-          <span class="api-desc">Historial de crashes por UUID</span>
-        </div>
-        <div class="api-endpoint" style="border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.04);">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url" style="color:var(--gold);background:var(--gold-glow);border-color:rgba(245,158,11,0.3);">/api/aviator/rounds/:num_id</span>
-          <span class="api-desc">⭐ Crashes por ID numérico corto — <code style="color:var(--gold);font-family:var(--font-mono);font-size:11px;">?limit=10</code></span>
-          <button class="copy-btn" onclick="copyText('/api/aviator/rounds/1?limit=10')">Ejemplo</button>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/api/aviator/bookmakers/:id/crashes/stream</span>
-          <span class="api-desc">Stream SSE de crashes en tiempo real</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/api/aviator/bookmakers/:id/debug</span>
-          <span class="api-desc">Frames raw de debug del WebSocket</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-post">POST</span>
-          <span class="api-url">/api/aviator/bookmakers/:id/ingest</span>
-          <span class="api-desc">Ingestar crash desde DOM scraper externo</span>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/api/export-config</span>
-          <span class="api-desc">Exportar config JSON para variable de entorno Render</span>
-          <button class="copy-btn" onclick="copyText('/api/export-config')">Copiar</button>
-        </div>
-        <div class="api-endpoint">
-          <span class="method-badge method-get">GET</span>
-          <span class="api-url">/health</span>
-          <span class="api-desc">Estado del servidor y conexiones activas</span>
-          <button class="copy-btn" onclick="copyText('/health')">Copiar</button>
-        </div>
+      <div class="endpoint-desc">Obtener todos los bookmakers</div>
+    </div>
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-get">GET</span>
+        <span class="endpoint-url">/api/aviator/bookmakers/:id</span>
       </div>
+      <div class="endpoint-desc">Obtener un bookmaker específico</div>
+    </div>
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-post">POST</span>
+        <span class="endpoint-url">/api/aviator/bookmakers</span>
+      </div>
+      <div class="endpoint-desc">Crear un nuevo bookmaker</div>
+    </div>
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-put">PUT</span>
+        <span class="endpoint-url">/api/aviator/bookmakers/:id</span>
+      </div>
+      <div class="endpoint-desc">Actualizar un bookmaker</div>
+    </div>
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-delete">DELETE</span>
+        <span class="endpoint-url">/api/aviator/bookmakers/:id</span>
+      </div>
+      <div class="endpoint-desc">Eliminar un bookmaker</div>
     </div>
 
-    <!-- Dynamic URLs by Bookmaker -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🔗 URLs Dinámicas por Bookmaker</div>
-        <button class="btn btn-ghost btn-sm" onclick="loadDynamicUrls()">Actualizar</button>
-      </div>
-      <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;">
-        URLs específicas generadas automáticamente para cada bookmaker configurado.
-      </p>
-      <div id="dynamicUrlsContainer">
-        <div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px;">
-          Cargando bookmakers...
-        </div>
-      </div>
+    <!-- URLs dinámicas -->
+    <div class="dynamic-section">
+      <div class="section-sub">URLs Dinámicas por Bookmaker</div>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">Ejemplos de URLs específicas basadas en los bookmakers actuales:</p>
+      <div id="dynamicUrls"></div>
     </div>
   </div>
+
 </div>
 
-<!-- Modal: Nuevo/Editar Bookmaker -->
+<!-- ── Modal ── -->
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
-    <h2 id="modalTitle"><span>Nuevo</span> Bookmaker</h2>
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <h2 id="modalTitle">Nuevo Bookmaker</h2>
     <input type="hidden" id="editId">
-    <div class="form-grid">
-      <div class="form-group">
-        <label>Nombre *</label>
-        <input type="text" id="fName" placeholder="ej. 1xBet Aviator">
-      </div>
-      <div class="form-group">
-        <label>Tipo Decoder</label>
-        <select id="fDecoder">
-          <option value="auto">Auto (Recomendado)</option>
-          <option value="msgpack">MessagePack</option>
-          <option value="sfs">SmartFoxServer (SFS)</option>
-        </select>
-      </div>
-      <div class="form-group full">
-        <label>Descripción</label>
-        <input type="text" id="fDesc" placeholder="Descripción opcional">
-      </div>
-      <div class="form-group full">
-        <label>URL Imagen (opcional)</label>
-        <input type="text" id="fImageUrl" placeholder="https://..." oninput="previewImage()">
-        <div class="img-preview-wrap">
-          <img id="imgPreview" class="img-preview" alt="Preview" onerror="this.classList.remove('visible')">
-        </div>
-      </div>
-      <div class="form-group full">
-        <label>URL WebSocket *</label>
-        <input type="text" id="fWsUrl" placeholder="wss://sa-east-1-game5.spribegaming.com/BlueBox/websocket">
-      </div>
-      <div class="form-group full">
-        <label>Primer Mensaje (Base64)</label>
-        <textarea id="fMsg1" rows="2" placeholder="Base64 encoded binary message..."></textarea>
-      </div>
-      <div class="form-group full">
-        <label>Segundo Mensaje (Base64)</label>
-        <textarea id="fMsg2" rows="2" placeholder="Base64 encoded binary message..."></textarea>
-      </div>
-      <div class="form-group full">
-        <label>Tercer Mensaje (Base64)</label>
-        <textarea id="fMsg3" rows="2" placeholder="Base64 encoded binary message..."></textarea>
-      </div>
-      <div class="form-group full">
-        <div class="toggle-row">
-          <label class="toggle">
-            <input type="checkbox" id="fActive" checked>
-            <div class="toggle-track"></div>
-            Activo
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="fRec">
-            <div class="toggle-track"></div>
-            Recomendado
-          </label>
-        </div>
-      </div>
+
+    <div class="form-group">
+      <label>Nombre *</label>
+      <input type="text" id="fName" placeholder="Nombre del bookmaker">
     </div>
-    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
-      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-gold" onclick="saveBm()">Guardar</button>
+    <div class="form-group">
+      <label>Descripción</label>
+      <textarea id="fDesc" rows="3" placeholder="Descripción opcional"></textarea>
+    </div>
+    <div class="form-group">
+      <label>URL Imagen</label>
+      <input type="text" id="fImageUrl" placeholder="https://ejemplo.com/logo.png">
+    </div>
+
+    <div class="checks-row">
+      <label class="check-label">
+        <input type="checkbox" id="fRec"> Recomendado
+      </label>
+      <label class="check-label">
+        <input type="checkbox" id="fActive" checked> Activo
+      </label>
+    </div>
+
+    <div class="form-group">
+      <label>URL WebSocket *</label>
+      <input type="text" id="fWsUrl" placeholder="wss://...">
+    </div>
+    <div class="form-group">
+      <label>Primer Mensaje (Base64) *</label>
+      <textarea id="fMsg1" rows="3" placeholder="Base64..."></textarea>
+    </div>
+    <div class="form-group">
+      <label>Segundo Mensaje (Base64) *</label>
+      <textarea id="fMsg2" rows="3" placeholder="Base64..."></textarea>
+    </div>
+    <div class="form-group">
+      <label>Tercer Mensaje (Base64) *</label>
+      <textarea id="fMsg3" rows="3" placeholder="Base64..."></textarea>
+    </div>
+    <div class="form-group">
+      <label>Tipo de Decoder *</label>
+      <select id="fDecoder">
+        <option value="auto">Auto-detectar</option>
+        <option value="msgpack">MessagePack</option>
+        <option value="sfs">SFS</option>
+      </select>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
+      <button class="btn-save"   onclick="saveBm()">Guardar</button>
     </div>
   </div>
 </div>
 
-<!-- Toast container -->
 <div class="toast-container" id="toasts"></div>
 
 <script>
@@ -596,7 +324,6 @@ let sseSource = null;
 let currentViewerId = null;
 let allBookmakers = [];
 
-// --- Toast ---
 function toast(msg, type = 'success') {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
@@ -605,18 +332,6 @@ function toast(msg, type = 'success') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// --- Tab switching ---
-function switchTab(name) {
-  document.querySelectorAll('.section-tab').forEach((t, i) => {
-    const tabs = ['bookmakers', 'api'];
-    t.classList.toggle('active', tabs[i] === name);
-  });
-  document.querySelectorAll('.section-content').forEach(c => c.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  if (name === 'api') loadDynamicUrls();
-}
-
-// --- API helpers ---
 async function apiFetch(url, opts = {}) {
   try {
     const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
@@ -627,43 +342,14 @@ async function apiFetch(url, opts = {}) {
   }
 }
 
-// --- Copy to clipboard ---
-function copyText(text) {
-  const full = window.location.origin + text;
-  navigator.clipboard.writeText(full).then(() => {
-    toast('URL copiada al portapapeles', 'info');
-  }).catch(() => {
-    toast('No se pudo copiar', 'error');
-  });
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
 }
 
-// --- Image preview in modal ---
-function previewImage() {
-  const url = document.getElementById('fImageUrl').value.trim();
-  const img = document.getElementById('imgPreview');
-  if (url) {
-    img.src = url;
-    img.classList.add('visible');
-  } else {
-    img.classList.remove('visible');
-  }
-}
-
-// --- Export Config ---
-async function exportConfig() {
-  try {
-    const r = await fetch('/api/export-config');
-    const d = await r.json();
-    const json = JSON.stringify(d);
-    navigator.clipboard.writeText(json).then(() => {
-      toast('Config copiada al portapapeles. Pégala en BOOKMAKERS_JSON de Render.', 'info');
-    });
-  } catch (e) {
-    toast('Error exportando config', 'error');
-  }
-}
-
-// --- Load bookmakers ---
+// ── Load & render bookmakers ──
 async function loadBm() {
   const data = await apiFetch(API);
   if (!data) return;
@@ -671,157 +357,81 @@ async function loadBm() {
 
   const tbody = document.getElementById('bmTableBody');
   const empty = document.getElementById('emptyState');
-  document.getElementById('bmCount').textContent = `${data.length} bookmaker${data.length !== 1 ? 's' : ''}`;
 
   if (data.length === 0) {
     tbody.innerHTML = '';
     empty.style.display = '';
+    empty.textContent = 'No hay bookmakers configurados.';
+    renderDynamicUrls([]);
     return;
   }
   empty.style.display = 'none';
 
   tbody.innerHTML = data.map(bm => {
-    const logoHtml = bm.image_url
-      ? `<img src="${esc(bm.image_url)}" class="bm-logo" alt="${esc(bm.name)}" onerror="this.style.display='none'">`
-      : `<div class="bm-logo-placeholder">🛩️</div>`;
-    return `
-    <tr>
-      <td style="width:40px;">${logoHtml}</td>
-      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;" title="${esc(bm.id)}">${esc(bm.id)}</td>
+    const isActive = bm.active !== false;
+    const isRec    = !!bm.recommended;
+    const nid      = bm.num_id != null ? bm.num_id : '—';
+    return `<tr>
+      <td class="td-id">${nid}</td>
+      <td class="td-name">${esc(bm.name)}</td>
+      <td class="td-desc">${esc(bm.description) || '-'}</td>
       <td>
-        <div style="font-weight:600;">${esc(bm.name)}</div>
-        <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);margin-top:2px;">${esc((bm.ws_url || '—').substring(0, 45))}${bm.ws_url && bm.ws_url.length > 45 ? '…' : ''}</div>
+        <span class="badge ${isActive ? 'badge-active' : 'badge-inactive'}">
+          <span class="badge-dot"></span>${isActive ? 'Activo' : 'Inactivo'}
+        </span>
       </td>
-      <td style="font-size:12px;color:var(--text-dim);max-width:160px;overflow:hidden;text-overflow:ellipsis;" title="${esc(bm.description || '')}">${esc(bm.description || '—')}</td>
-      <td><span class="status-pill status-${bm.connection_status || 'disconnected'}">${statusIcon(bm.connection_status)} ${bm.connection_status || 'off'}</span></td>
-      <td style="font-family:var(--font-mono);font-size:12px;">${esc(bm.decoder_type || 'auto')}</td>
       <td>
-        <span style="font-family:var(--font-mono);font-weight:600;cursor:pointer;color:var(--gold);" onclick="openCrashViewer('${bm.id}','${esc(bm.name)}')">${bm.crash_count || 0}</span>
+        <span class="badge ${isRec ? 'badge-rec' : 'badge-norec'}">
+          ${isRec ? 'Recomendado' : 'No recomendado'}
+        </span>
       </td>
-      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">
-        ${bm.last_crash_at ? new Date(bm.last_crash_at).toLocaleTimeString('es-CO') : '—'}
-      </td>
-      <td>${bm.recommended ? '<span class="rec-star">★</span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
-      <td style="text-align:right;white-space:nowrap;">
-        <button class="btn btn-ghost btn-sm" onclick="openDebug('${bm.id}','${esc(bm.name)}')" title="Ver frames raw">🔍</button>
-        <button class="btn btn-ghost btn-sm" onclick="editBm('${bm.id}')">Editar</button>
-        <button class="btn btn-red btn-sm" onclick="deleteBm('${bm.id}','${esc(bm.name)}')">Eliminar</button>
+      <td>
+        <div class="actions-cell">
+          <button class="btn-icon btn-edit"   onclick="editBm('${bm.id}')" title="Editar">✎</button>
+          <button class="btn-icon btn-delete" onclick="deleteBm('${bm.id}','${esc(bm.name)}')" title="Eliminar">🗑</button>
+        </div>
       </td>
     </tr>`;
   }).join('');
+
+  renderDynamicUrls(data);
 }
 
-// --- Dynamic URLs for API tab ---
-async function loadDynamicUrls() {
-  const container = document.getElementById('dynamicUrlsContainer');
+// ── Dynamic URLs ──
+function renderDynamicUrls(data) {
   const base = window.location.origin;
-
-  if (!allBookmakers || allBookmakers.length === 0) {
-    const data = await apiFetch(API);
-    if (data) allBookmakers = data;
-  }
-
-  if (!allBookmakers || allBookmakers.length === 0) {
-    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px;">Sin bookmakers configurados. Agrega uno primero.</div>';
+  const container = document.getElementById('dynamicUrls');
+  if (!data || data.length === 0) {
+    container.innerHTML = '<p style="font-size:13px;color:#6b7280;">No hay bookmakers configurados aún.</p>';
     return;
   }
-
-  // Endpoints adicionales por UUID (stream, debug, ingest)
-  const uuidEndpoints = [
-    { suffix: '/crashes/stream', label: 'SSE Stream', method: 'GET' },
-    { suffix: '/debug',          label: 'Debug',      method: 'GET' },
-    { suffix: '/ingest',         label: 'Ingest',     method: 'POST' },
-  ];
-
-  container.innerHTML = allBookmakers.map(bm => {
-    const nid = bm.num_id || '?';
-    const roundsUrl   = `${base}/api/aviator/rounds/${nid}`;
-    const roundsUrl10 = `${base}/api/aviator/rounds/${nid}?limit=10`;
-    const roundsUrl50 = `${base}/api/aviator/rounds/${nid}?limit=50`;
-
-    const logoHtml = bm.image_url
-      ? `<img src="${esc(bm.image_url)}" style="width:22px;height:22px;border-radius:6px;object-fit:cover;border:1px solid var(--border);" onerror="this.style.display='none'">`
-      : '🛩️';
-
-    return `
-    <div style="margin-bottom:20px;">
-      <!-- Título del bookmaker -->
-      <div style="font-weight:700;font-size:14px;color:var(--gold);margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        ${logoHtml}
-        ${esc(bm.name)}
-        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);font-weight:400;background:var(--bg-input);padding:2px 8px;border-radius:6px;border:1px solid var(--border);">(ID: ${nid})</span>
+  container.innerHTML = data.map(bm => {
+    const nid = bm.num_id != null ? bm.num_id : '?';
+    const url = `${base}/api/aviator/rounds/${nid}?limit=10`;
+    return `<div class="dynamic-bm-block">
+      <div class="dynamic-bm-name">${esc(bm.name)} (ID: ${nid})</div>
+      <div class="dynamic-url-row">
+        <span class="method-badge m-get">GET</span>
+        <span class="dynamic-url-text"><a href="${url}" target="_blank">${url}</a></span>
       </div>
-
-      <!-- ⭐ Endpoint principal /rounds/:num_id — igual que aviator-szte -->
-      <div style="margin-bottom:6px;">
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;font-family:var(--font-mono);letter-spacing:0.5px;">ENDPOINT PRINCIPAL</div>
-        <div class="dynamic-url-item" style="border-color:rgba(245,158,11,0.35);background:rgba(245,158,11,0.05);">
-          <span class="method-badge method-get" style="font-size:10px;">GET</span>
-          <a href="${roundsUrl10}" target="_blank" class="dynamic-url-link" style="color:var(--gold);font-size:12px;">${roundsUrl10}</a>
-          <button class="copy-btn" onclick="navigator.clipboard.writeText('${roundsUrl10}').then(()=>toast('Copiado','info'))">Copiar</button>
-        </div>
-        <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
-          <div class="dynamic-url-item" style="flex:1;min-width:0;">
-            <span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">limit=50</span>
-            <a href="${roundsUrl50}" target="_blank" class="dynamic-url-link" style="font-size:11px;">${roundsUrl50}</a>
-            <button class="copy-btn" onclick="navigator.clipboard.writeText('${roundsUrl50}').then(()=>toast('Copiado','info'))">Copiar</button>
-          </div>
-          <div class="dynamic-url-item" style="flex:1;min-width:0;">
-            <span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">sin limit</span>
-            <a href="${roundsUrl}" target="_blank" class="dynamic-url-link" style="font-size:11px;">${roundsUrl}</a>
-            <button class="copy-btn" onclick="navigator.clipboard.writeText('${roundsUrl}').then(()=>toast('Copiado','info'))">Copiar</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Endpoints secundarios por UUID -->
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;margin-top:10px;font-family:var(--font-mono);letter-spacing:0.5px;">ENDPOINTS SECUNDARIOS</div>
-      ${uuidEndpoints.map(u => {
-        const full = `${base}${API}/${bm.id}${u.suffix}`;
-        return `<div class="dynamic-url-item">
-          <span class="method-badge ${u.method === 'POST' ? 'method-post' : 'method-get'}" style="font-size:10px;">${u.method}</span>
-          <span class="dynamic-url-bm" style="font-size:11px;">${u.label}</span>
-          <a href="${full}" target="_blank" class="dynamic-url-link" style="font-size:11px;">${full}</a>
-          <button class="copy-btn" onclick="navigator.clipboard.writeText('${full}').then(()=>toast('Copiado','info'))">Copiar</button>
-        </div>`;
-      }).join('')}
     </div>`;
-  }).join('<hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">');
+  }).join('');
 }
 
-function statusIcon(s) {
-  if (s === 'connected') return '●';
-  if (s === 'connecting') return '◌';
-  if (s === 'error') return '✕';
-  return '○';
-}
-
-function esc(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-// --- Modal ---
+// ── Modal ──
 function openModal(bm = null) {
-  document.getElementById('editId').value = bm ? bm.id : '';
-  document.getElementById('modalTitle').innerHTML = bm ? '<span>Editar</span> Bookmaker' : '<span>Nuevo</span> Bookmaker';
-  document.getElementById('fName').value = bm ? bm.name : '';
-  document.getElementById('fDesc').value = bm ? (bm.description || '') : '';
-  document.getElementById('fImageUrl').value = bm ? (bm.image_url || '') : '';
-  document.getElementById('fWsUrl').value = bm ? bm.ws_url : '';
-  document.getElementById('fMsg1').value = bm ? (bm.msg1_b64 || '') : '';
-  document.getElementById('fMsg2').value = bm ? (bm.msg2_b64 || '') : '';
-  document.getElementById('fMsg3').value = bm ? (bm.msg3_b64 || '') : '';
-  document.getElementById('fDecoder').value = bm ? (bm.decoder_type || 'auto') : 'auto';
-  document.getElementById('fActive').checked = bm ? bm.active : true;
-  document.getElementById('fRec').checked = bm ? bm.recommended : false;
-  // Preview image
-  const img = document.getElementById('imgPreview');
-  const imgUrl = bm ? (bm.image_url || '') : '';
-  if (imgUrl) { img.src = imgUrl; img.classList.add('visible'); }
-  else { img.classList.remove('visible'); img.src = ''; }
+  document.getElementById('editId').value             = bm ? bm.id : '';
+  document.getElementById('modalTitle').textContent   = bm ? 'Editar Bookmaker' : 'Nuevo Bookmaker';
+  document.getElementById('fName').value              = bm ? (bm.name || '') : '';
+  document.getElementById('fDesc').value              = bm ? (bm.description || '') : '';
+  document.getElementById('fImageUrl').value          = bm ? (bm.image_url || '') : '';
+  document.getElementById('fWsUrl').value             = bm ? (bm.ws_url || '') : '';
+  document.getElementById('fMsg1').value              = bm ? (bm.msg1_b64 || '') : '';
+  document.getElementById('fMsg2').value              = bm ? (bm.msg2_b64 || '') : '';
+  document.getElementById('fMsg3').value              = bm ? (bm.msg3_b64 || '') : '';
+  document.getElementById('fDecoder').value           = bm ? (bm.decoder_type || 'auto') : 'auto';
+  document.getElementById('fActive').checked          = bm ? (bm.active !== false) : true;
+  document.getElementById('fRec').checked             = bm ? !!bm.recommended : false;
   document.getElementById('modalOverlay').classList.add('active');
 }
 
@@ -831,41 +441,34 @@ function closeModal() {
 
 async function editBm(id) {
   const bm = allBookmakers.find(b => b.id === id);
-  if (bm) openModal(bm);
-  else {
-    const data = await apiFetch(API);
-    const found = data?.find(b => b.id === id);
-    if (found) openModal(found);
-  }
+  if (bm) { openModal(bm); return; }
+  const data = await apiFetch(API);
+  const found = data?.find(b => b.id === id);
+  if (found) openModal(found);
 }
 
 async function saveBm() {
   const id = document.getElementById('editId').value;
   const body = {
-    name: document.getElementById('fName').value,
-    description: document.getElementById('fDesc').value,
-    image_url: document.getElementById('fImageUrl').value,
-    ws_url: document.getElementById('fWsUrl').value,
-    msg1_b64: document.getElementById('fMsg1').value,
-    msg2_b64: document.getElementById('fMsg2').value,
-    msg3_b64: document.getElementById('fMsg3').value,
+    name:         document.getElementById('fName').value.trim(),
+    description:  document.getElementById('fDesc').value.trim(),
+    image_url:    document.getElementById('fImageUrl').value.trim(),
+    ws_url:       document.getElementById('fWsUrl').value.trim(),
+    msg1_b64:     document.getElementById('fMsg1').value.trim(),
+    msg2_b64:     document.getElementById('fMsg2').value.trim(),
+    msg3_b64:     document.getElementById('fMsg3').value.trim(),
     decoder_type: document.getElementById('fDecoder').value,
-    active: document.getElementById('fActive').checked,
-    recommended: document.getElementById('fRec').checked,
+    active:       document.getElementById('fActive').checked,
+    recommended:  document.getElementById('fRec').checked,
   };
-
   if (!body.name || !body.ws_url) {
     toast('Nombre y URL WebSocket son requeridos', 'error');
     return;
   }
-
-  let result;
-  if (id) {
-    result = await apiFetch(`${API}/${id}`, { method: 'PUT', body: JSON.stringify(body) });
-  } else {
-    result = await apiFetch(API, { method: 'POST', body: JSON.stringify(body) });
-  }
-
+  const result = await apiFetch(id ? `${API}/${id}` : API, {
+    method: id ? 'PUT' : 'POST',
+    body: JSON.stringify(body),
+  });
   if (result && !result.error) {
     toast(id ? 'Bookmaker actualizado' : 'Bookmaker creado');
     closeModal();
@@ -885,8 +488,8 @@ async function deleteBm(id, name) {
   }
 }
 
-// --- Crash Viewer with SSE ---
-const MAX_CRASHES_UI = 30;
+// ── Crash viewer SSE ──
+const MAX_UI = 30;
 const seenIds = {};
 
 function openCrashViewer(id, name) {
@@ -895,44 +498,35 @@ function openCrashViewer(id, name) {
   document.getElementById('viewerName').textContent = name;
   document.getElementById('crashViewer').style.display = '';
   if (!seenIds[id]) seenIds[id] = new Set();
-
   const container = document.getElementById('crashesContainer');
   container.innerHTML = '';
 
   function connectSSE() {
     if (sseSource) { sseSource.close(); sseSource = null; }
     sseSource = new EventSource(`${API}/${id}/crashes/stream`);
-
     sseSource.addEventListener('init', (e) => {
       try {
         const list = JSON.parse(e.data);
         container.innerHTML = '';
         seenIds[id].clear();
-        list.forEach(c => {
-          seenIds[id].add(c.id);
-          renderCrash(c, container);
-        });
+        list.forEach(c => { seenIds[id].add(c.id); renderCrash(c, container); });
       } catch {}
     });
-
     sseSource.onmessage = (e) => {
       try {
         const crash = JSON.parse(e.data);
         if (seenIds[id].has(crash.id)) return;
         seenIds[id].add(crash.id);
         renderCrash(crash, container);
-        while (container.children.length > MAX_CRASHES_UI) container.lastChild.remove();
-        container.scrollTop = 0;
+        while (container.children.length > MAX_UI) container.lastChild.remove();
         loadBm();
       } catch {}
     };
-
     sseSource.onerror = () => {
       sseSource.close(); sseSource = null;
       if (currentViewerId === id) setTimeout(connectSSE, 2000);
     };
   }
-
   connectSSE();
 }
 
@@ -943,13 +537,11 @@ function renderCrash(c, container) {
   if (m >= 10) cls = 'crash-mega';
   else if (m >= 5) cls = 'crash-high';
   else if (m >= 2) cls = 'crash-mid';
-  el.className = `crash-entry ${cls}`;
+  el.className = `crash-chip ${cls}`;
   el.textContent = `${m}x`;
-  el.title = c.timestamp ? new Date(c.timestamp).toLocaleTimeString() : '';
+  el.title = c.timestamp ? new Date(c.timestamp).toLocaleTimeString('es-CO') : '';
   container.prepend(el);
 }
-
-function appendCrash(c) { renderCrash(c, document.getElementById('crashesContainer')); }
 
 function closeCrashViewer() {
   if (sseSource) { sseSource.close(); sseSource = null; }
@@ -958,19 +550,7 @@ function closeCrashViewer() {
   document.getElementById('crashesContainer').innerHTML = '';
 }
 
-// --- Health check ---
-async function checkHealth() {
-  try {
-    const r = await fetch('/health');
-    const d = await r.json();
-    document.getElementById('healthText').textContent =
-      `${d.active_connections || 0} activas / ${d.bookmakers || 0} BMs / ${d.total_crashes || 0} crashes`;
-  } catch {
-    document.getElementById('healthText').textContent = 'Offline';
-  }
-}
-
-// --- Debug Frame Viewer ---
+// ── Debug ──
 let debugBmId = null;
 
 async function openDebug(id, name) {
@@ -984,56 +564,31 @@ async function refreshDebug() {
   if (!debugBmId) return;
   const data = await apiFetch(`${API}/${debugBmId}/debug`);
   if (!data) return;
-
   document.getElementById('debugStatus').textContent =
     `Estado: ${data.connection_status} | Frames: ${data.frame_count} | Crashes: ${data.crash_count}`;
-
   const container = document.getElementById('debugContainer');
   if (!data.frames || data.frames.length === 0) {
-    container.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center;">Sin frames recibidos aún. Verifica que el WS esté conectado y los mensajes Base64 sean correctos.</div>';
+    container.innerHTML = '<div style="color:#6b7280;padding:16px;text-align:center;">Sin frames recibidos aún.</div>';
     return;
   }
-
   container.innerHTML = data.frames.map((f, i) => {
     const isText = f.type === 'TEXT';
-    const methodColor = {
-      'json': '#a78bfa', 'json_lines': '#a78bfa', 'json_embed': '#a78bfa',
-      'msgpack': 'var(--blue)', 'raw_double': 'var(--gold)', 'regex': '#f472b6', 'regex_div100': '#f472b6',
-    };
-    const mColor = (f.method && f.method.startsWith('sfs')) ? 'var(--green)' : (methodColor[f.method] || 'var(--text-dim)');
-
-    let decodedHtml = '';
-    if (f.decoded) {
-      decodedHtml = `<div style="color:${mColor};margin-top:4px;word-break:break-all;"><b>${esc(f.method || '?')}:</b> ${esc(String(f.decoded).substring(0,800))}</div>`;
-    } else {
-      decodedHtml = '<div style="color:var(--text-muted);margin-top:4px;">⚠ No se pudo decodificar</div>';
-    }
-
-    let multsHtml = '';
-    if (f.mults && f.mults.length > 0) {
-      multsHtml = `<div style="margin-top:4px;">${f.mults.map(m => {
-        let cls = 'crash-low';
-        if (m >= 10) cls = 'crash-mega';
-        else if (m >= 5) cls = 'crash-high';
-        else if (m >= 2) cls = 'crash-mid';
-        return '<span class="crash-entry ' + cls + '">★ ' + m + 'x</span>';
-      }).join(' ')}</div>`;
-    }
-
-    const rawInfo = isText
-      ? `<div style="margin-top:6px;word-break:break-all;"><span style="color:var(--text-dim);">TEXT:</span> ${esc((f.text_preview||'').substring(0,400))}</div>`
-      : `<div style="margin-top:6px;word-break:break-all;"><span style="color:var(--text-dim);">HEX:</span> ${esc(f.hex||'')}</div>
-         <div style="margin-top:2px;word-break:break-all;"><span style="color:var(--text-dim);">ASCII:</span> ${esc(f.ascii||'')}</div>`;
-
-    return `<div style="border-bottom:1px solid var(--border);padding:10px 0;">
-      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;">
-        <span style="color:var(--gold);font-weight:600;">Frame #${data.frames.length - i} <span style="font-size:10px;color:${isText?'#a78bfa':'var(--blue)'}">[${isText?'TEXT':'BIN'}]</span></span>
-        <span style="color:var(--text-muted);">${f.time || ''} | ${f.size} ${isText?'chars':'bytes'}</span>
-      </div>
-      ${rawInfo}
-      ${decodedHtml}
-      ${multsHtml}
-    </div>`;
+    const decoded = f.decoded
+      ? `<div style="color:#a5b4fc;margin-top:4px;word-break:break-all;"><b>${esc(f.method||'?')}:</b> ${esc(String(f.decoded).substring(0,800))}</div>`
+      : '<div style="color:#6b7280;margin-top:4px;">⚠ No decodificado</div>';
+    const mults = (f.mults && f.mults.length > 0)
+      ? `<div style="margin-top:4px;">${f.mults.map(m => {
+          let cls = m>=10?'crash-mega':m>=5?'crash-high':m>=2?'crash-mid':'crash-low';
+          return `<span class="crash-chip ${cls}">★ ${m}x</span>`;
+        }).join(' ')}</div>` : '';
+    const raw = isText
+      ? `<div style="margin-top:6px;word-break:break-all;color:#6b7280;">TEXT: ${esc((f.text_preview||'').substring(0,300))}</div>`
+      : `<div style="margin-top:6px;word-break:break-all;color:#6b7280;">HEX: ${esc(f.hex||'')}</div>`;
+    return `<div style="border-bottom:1px solid #1f2937;padding:10px 0;">
+      <div style="display:flex;justify-content:space-between;">
+        <span style="color:#fbbf24;font-weight:600;">Frame #${data.frames.length-i} [${isText?'TEXT':'BIN'}]</span>
+        <span style="color:#6b7280;font-size:10px;">${f.size} ${isText?'chars':'bytes'}</span>
+      </div>${raw}${decoded}${mults}</div>`;
   }).reverse().join('');
 }
 
@@ -1043,16 +598,13 @@ function closeDebug() {
   document.getElementById('debugContainer').innerHTML = '';
 }
 
-// --- Close modal on overlay click ---
 document.getElementById('modalOverlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
 });
 
-// --- Init ---
+// ── Init ──
 loadBm();
-checkHealth();
 setInterval(loadBm, 15000);
-setInterval(checkHealth, 10000);
 </script>
 </body>
 </html>
