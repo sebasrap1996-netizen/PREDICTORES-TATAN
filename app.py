@@ -686,28 +686,29 @@ def _start_ws(bm_id):
         _store_dbg(bm_id, dbg)
 
     def on_error(ws, error):
+        # Solo loguear — on_close manejará el estado y la reconexión
         log.error("[%s] ✗ ERROR: %s", name, error)
-        # Solo actualizar estado si este hilo sigue siendo el activo
-        if ws_generation.get(bm_id) == gen:
-            connection_status[bm_id] = "error"
 
     def on_close(ws, code, msg):
         log.info("[%s] CLOSED code=%s | handshake=%s login=%s step=%s | sent=%d bin=%d txt=%d",
                  name, code,
                  auth_state["handshake_done"], auth_state["login_done"], auth_state["step"],
                  stats["sent"], stats["recv_bin"], stats["recv_txt"])
-        # Solo tocar el estado y reconectar si este hilo sigue siendo el activo
+        # Ignorar si este hilo ya está obsoleto
         if ws_generation.get(bm_id) != gen:
             log.debug("[%s] on_close: hilo obsoleto gen=%d, ignorando", name, gen)
             return
-        connection_status[bm_id] = "disconnected"
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
-            log.info("[%s] Reconnect in 5s...", name)
+            # Va a reconectar — mostrar "connecting" para que la UI no muestre error
+            connection_status[bm_id] = "connecting"
+            log.info("[%s] Reconnect en 5s...", name)
             def _reconnect():
                 time.sleep(5)
                 if ws_generation.get(bm_id) == gen and bm_id in bookmakers and bookmakers[bm_id].get("active", False):
                     _start_ws(bm_id)
             threading.Thread(target=_reconnect, daemon=True).start()
+        else:
+            connection_status[bm_id] = "disconnected"
 
     ws_app = websocket.WebSocketApp(
         ws_url, on_open=on_open, on_message=on_message,
@@ -941,6 +942,29 @@ def _autostart():
             _start_ws(bid); time.sleep(1)
 
 threading.Thread(target=_autostart, daemon=True).start()
+
+def _watchdog():
+    """
+    Revisa cada 20s si los bookmakers activos siguen conectados.
+    Si encuentra status 'error' o 'disconnected', reconecta.
+    Resuelve el problema de Render free tier que duerme el servicio.
+    """
+    time.sleep(15)  # esperar que el autostart termine
+    while True:
+        try:
+            for bid, bm in list(bookmakers.items()):
+                if not bm.get("active", False):
+                    continue
+                status = connection_status.get(bid, "disconnected")
+                if status in ("error", "disconnected"):
+                    log.info("[watchdog] %s está en '%s' — reconectando...", bm.get("name", bid), status)
+                    _start_ws(bid)
+                    time.sleep(2)  # evitar reconectar todos al mismo tiempo
+        except Exception as e:
+            log.error("[watchdog] Error: %s", e)
+        time.sleep(20)
+
+threading.Thread(target=_watchdog, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False)
