@@ -463,7 +463,13 @@ tr:hover td { background: var(--bg-card-hover); }
         <div class="api-endpoint">
           <span class="method-badge method-get">GET</span>
           <span class="api-url">/api/aviator/bookmakers/:id/crashes</span>
-          <span class="api-desc">Historial de crashes de un bookmaker</span>
+          <span class="api-desc">Historial de crashes por UUID</span>
+        </div>
+        <div class="api-endpoint" style="border-color:rgba(245,158,11,0.3);background:rgba(245,158,11,0.04);">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url" style="color:var(--gold);background:var(--gold-glow);border-color:rgba(245,158,11,0.3);">/api/aviator/rounds/:num_id</span>
+          <span class="api-desc">⭐ Crashes por ID numérico corto — <code style="color:var(--gold);font-family:var(--font-mono);font-size:11px;">?limit=10</code></span>
+          <button class="copy-btn" onclick="copyText('/api/aviator/rounds/1?limit=10')">Ejemplo</button>
         </div>
         <div class="api-endpoint">
           <span class="method-badge method-get">GET</span>
@@ -716,30 +722,67 @@ async function loadDynamicUrls() {
     return;
   }
 
-  const urlTypes = [
-    { suffix: '/crashes', label: 'Crashes' },
-    { suffix: '/crashes/stream', label: 'SSE Stream' },
-    { suffix: '/debug', label: 'Debug' },
-    { suffix: '/ingest', label: 'Ingest (POST)' },
+  // Endpoints adicionales por UUID (stream, debug, ingest)
+  const uuidEndpoints = [
+    { suffix: '/crashes/stream', label: 'SSE Stream', method: 'GET' },
+    { suffix: '/debug',          label: 'Debug',      method: 'GET' },
+    { suffix: '/ingest',         label: 'Ingest',     method: 'POST' },
   ];
 
-  container.innerHTML = allBookmakers.map(bm => `
-    <div style="margin-bottom:16px;">
-      <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px;display:flex;align-items:center;gap:8px;">
-        ${bm.image_url ? `<img src="${esc(bm.image_url)}" class="bm-logo" style="width:20px;height:20px;" onerror="this.style.display='none'">` : '🛩️'}
+  container.innerHTML = allBookmakers.map(bm => {
+    const nid = bm.num_id || '?';
+    const roundsUrl   = `${base}/api/aviator/rounds/${nid}`;
+    const roundsUrl10 = `${base}/api/aviator/rounds/${nid}?limit=10`;
+    const roundsUrl50 = `${base}/api/aviator/rounds/${nid}?limit=50`;
+
+    const logoHtml = bm.image_url
+      ? `<img src="${esc(bm.image_url)}" style="width:22px;height:22px;border-radius:6px;object-fit:cover;border:1px solid var(--border);" onerror="this.style.display='none'">`
+      : '🛩️';
+
+    return `
+    <div style="margin-bottom:20px;">
+      <!-- Título del bookmaker -->
+      <div style="font-weight:700;font-size:14px;color:var(--gold);margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        ${logoHtml}
         ${esc(bm.name)}
-        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;">[${esc(bm.id)}]</span>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);font-weight:400;background:var(--bg-input);padding:2px 8px;border-radius:6px;border:1px solid var(--border);">(ID: ${nid})</span>
       </div>
-      ${urlTypes.map(u => {
+
+      <!-- ⭐ Endpoint principal /rounds/:num_id — igual que aviator-szte -->
+      <div style="margin-bottom:6px;">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;font-family:var(--font-mono);letter-spacing:0.5px;">ENDPOINT PRINCIPAL</div>
+        <div class="dynamic-url-item" style="border-color:rgba(245,158,11,0.35);background:rgba(245,158,11,0.05);">
+          <span class="method-badge method-get" style="font-size:10px;">GET</span>
+          <a href="${roundsUrl10}" target="_blank" class="dynamic-url-link" style="color:var(--gold);font-size:12px;">${roundsUrl10}</a>
+          <button class="copy-btn" onclick="navigator.clipboard.writeText('${roundsUrl10}').then(()=>toast('Copiado','info'))">Copiar</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
+          <div class="dynamic-url-item" style="flex:1;min-width:0;">
+            <span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">limit=50</span>
+            <a href="${roundsUrl50}" target="_blank" class="dynamic-url-link" style="font-size:11px;">${roundsUrl50}</a>
+            <button class="copy-btn" onclick="navigator.clipboard.writeText('${roundsUrl50}').then(()=>toast('Copiado','info'))">Copiar</button>
+          </div>
+          <div class="dynamic-url-item" style="flex:1;min-width:0;">
+            <span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">sin limit</span>
+            <a href="${roundsUrl}" target="_blank" class="dynamic-url-link" style="font-size:11px;">${roundsUrl}</a>
+            <button class="copy-btn" onclick="navigator.clipboard.writeText('${roundsUrl}').then(()=>toast('Copiado','info'))">Copiar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Endpoints secundarios por UUID -->
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;margin-top:10px;font-family:var(--font-mono);letter-spacing:0.5px;">ENDPOINTS SECUNDARIOS</div>
+      ${uuidEndpoints.map(u => {
         const full = `${base}${API}/${bm.id}${u.suffix}`;
         return `<div class="dynamic-url-item">
-          <span class="dynamic-url-bm">${u.label}</span>
-          <a href="${full}" target="_blank" class="dynamic-url-link">${full}</a>
+          <span class="method-badge ${u.method === 'POST' ? 'method-post' : 'method-get'}" style="font-size:10px;">${u.method}</span>
+          <span class="dynamic-url-bm" style="font-size:11px;">${u.label}</span>
+          <a href="${full}" target="_blank" class="dynamic-url-link" style="font-size:11px;">${full}</a>
           <button class="copy-btn" onclick="navigator.clipboard.writeText('${full}').then(()=>toast('Copiado','info'))">Copiar</button>
         </div>`;
       }).join('')}
-    </div>
-  `).join('<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">');
+    </div>`;
+  }).join('<hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">');
 }
 
 function statusIcon(s) {
