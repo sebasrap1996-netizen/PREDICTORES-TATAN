@@ -579,6 +579,8 @@ def _b64_to_bytes(s):
 
 # Generación activa por bookmaker — evita doble-registro cuando hay reconexión
 ws_generation: dict = {}
+# Último multiplicador registrado por bookmaker — dedup intra-ronda
+_last_recorded: dict = {}   # bm_id → {"mult": float, "time": datetime, "round_id": str|None}
 
 def _start_ws(bm_id):
     bm = bookmakers.get(bm_id)
@@ -710,19 +712,12 @@ def _start_ws(bm_id):
                 _record_crash(bm_id, name, m, rid)
 
         elif auth_state["step"] == "authenticated":
-            # Frame llegó pero no fue clasificado como game data.
-            # Loguearlo para identificar el comando real de crash del servidor.
+            # Frame no clasificado como game. Solo loguear — NO intentar extracción
+            # para evitar registrar duplicados desde frames de tick/cashout/estado
+            # que contienen multipliers de jugadores activos (no crashes reales).
             if parsed:
-                log.info("[%s] UNKNOWN post-auth frame: ftype=%s decoded=%s",
+                log.info("[%s] UNKNOWN post-auth frame (skipped extraction): ftype=%s decoded=%s",
                          name, ftype, _sj(parsed)[:800])
-                # Intentar extracción directa — puede ser game data con estructura no estándar
-                mults, rid = extract_game_mults(parsed, name)
-                if not mults:
-                    mults = _scan_game_obj(parsed, name, "", 0)
-                dbg["mults"] = mults
-                for m in mults:
-                    log.info("[%s] ★ CRASH from unknown frame: %.2fx", name, m)
-                    _record_crash(bm_id, name, m, rid)
             else:
                 log.info("[%s] Undecoded post-auth frame: hex=%s",
                          name, message[:30].hex() if isinstance(message, bytes) else "txt")
@@ -828,45 +823,50 @@ def _start_ws(bm_id):
 
 def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     """
-    Registra crash. Estrategia:
-    - crashX (sin round_id): registra INMEDIATAMENTE para captura instantánea.
-    - roundChartInfo (con round_id): si el mismo valor ya fue registrado en los
-      últimos 10s → solo añade round_id al entry existente (sin duplicar ni
-      enviar SSE de nuevo). Si no existe → registra normalmente.
+    Registra crash con dedup en 3 capas para evitar duplicados:
+
+    Capa 1 — round_id exacto: si ya existe un entry con ese round_id → skip.
+    Capa 2 — enriquecimiento: si llega round_id y ya hay un entry sin round_id
+             con el mismo valor en los últimos 15s → solo añade round_id, sin duplicar.
+    Capa 3 — ventana temporal: mismo valor registrado en los últimos 15s → skip.
+             (Cubre reconexiones rápidas, doble-decodificación sfs_hdr/sfs_hdr_zlib,
+              y el caso en que on_message registra el mismo crash desde dos frames
+              con distinto label pero idéntico contenido.)
     """
     now = datetime.now(timezone.utc)
     mult = round(float(multiplier), 2)
 
-    # Dedup por round_id exacto (roundChartInfo ya registrado)
+    # Capa 1: dedup por round_id exacto
     if round_id is not None:
-        for prev in reversed(crashes.get(bm_id, [])[-30:]):
+        for prev in reversed(crashes.get(bm_id, [])[-50:]):
             if prev.get("round_id") == round_id:
-                log.debug("[%s] Dedup: roundId=%s ya existe", bm_name, round_id)
+                log.debug("[%s] Dedup capa1: roundId=%s ya existe", bm_name, round_id)
                 return
 
-    # Si llega roundChartInfo y ya hay un entry con el mismo valor en últimos 10s
-    # (capturado vía crashX), solo actualizar el round_id sin duplicar
+    # Capa 2: roundChartInfo confirma un crashX previo — enriquecer sin duplicar
     if round_id is not None:
         for prev in reversed(crashes.get(bm_id, [])[-5:]):
             try:
                 prev_t = datetime.fromisoformat(prev["timestamp"])
-                if (now - prev_t).total_seconds() > 10:
+                if (now - prev_t).total_seconds() > 15:
                     break
                 if round(float(prev["multiplier"]), 2) == mult and prev.get("round_id") is None:
                     prev["round_id"] = round_id
-                    log.debug("[%s] Dedup: roundChartInfo %.2fx enriquece entry crashX", bm_name, mult)
+                    log.debug("[%s] Dedup capa2: roundChartInfo %.2fx enriquece crashX", bm_name, mult)
                     return
             except:
                 pass
 
-    # Dedup final: mismo valor en últimos 2s solamente
-    for prev in reversed(crashes.get(bm_id, [])[-3:]):
+    # Capa 3: mismo valor en los últimos 15s (ventana ampliada para cubrir
+    # doble-decodificación y reconexiones rápidas del watchdog)
+    for prev in reversed(crashes.get(bm_id, [])[-10:]):
         try:
             prev_t = datetime.fromisoformat(prev["timestamp"])
-            if (now - prev_t).total_seconds() > 2:
+            age = (now - prev_t).total_seconds()
+            if age > 15:
                 break
             if round(float(prev["multiplier"]), 2) == mult:
-                log.debug("[%s] Dedup: %.2fx ya registrado en <2s", bm_name, mult)
+                log.debug("[%s] Dedup capa3: %.2fx ya registrado hace %.1fs", bm_name, mult, age)
                 return
         except:
             pass
