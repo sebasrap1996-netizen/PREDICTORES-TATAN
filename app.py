@@ -41,6 +41,11 @@ debug_frames: dict = defaultdict(list)
 MAX_CRASHES = 1000
 MAX_DBG = 200
 
+# Contador numérico para IDs tipo /rounds/1, /rounds/2 — igual que aviator-szte
+_bm_counter: int = 0
+# Mapa num_id (int) → bid (uuid string) para lookup en /rounds/:num_id
+_num_to_bid: dict = {}
+
 def _load_config():
     global bookmakers, crashes
 
@@ -52,6 +57,7 @@ def _load_config():
             bookmakers = d.get("bookmakers", {})
             for k, v in d.get("crashes", {}).items():
                 crashes[k] = v
+            _rebuild_num_index()
             log.info("Loaded %d bookmakers from BOOKMAKERS_JSON env var", len(bookmakers))
             return
         except Exception as e:
@@ -76,6 +82,7 @@ def _load_config():
             bookmakers = d.get("bookmakers", {})
             for k, v in d.get("crashes", {}).items():
                 crashes[k] = v
+            _rebuild_num_index()
             log.info("Loaded %d bookmakers from config.json", len(bookmakers))
         except Exception as e:
             log.error("Load fail: %s", e)
@@ -103,6 +110,30 @@ def _save_crashes():
             json.dump(slim, f, default=str)
     except Exception as e:
         log.error("crashes save fail: %s", e)
+
+def _rebuild_num_index():
+    """
+    Reconstruye _num_to_bid y _bm_counter a partir de los bookmakers cargados.
+    Cada bookmaker tiene un campo 'num_id' (entero) asignado al crearlo.
+    Si no lo tiene (bookmakers viejos), se asigna uno nuevo.
+    """
+    global _bm_counter, _num_to_bid
+    _num_to_bid = {}
+    max_num = 0
+    for bid, bm in bookmakers.items():
+        nid = bm.get("num_id")
+        if isinstance(nid, int):
+            _num_to_bid[nid] = bid
+            if nid > max_num:
+                max_num = nid
+    # Asignar num_id a bookmakers que no lo tengan (compatibilidad hacia atrás)
+    for bid, bm in bookmakers.items():
+        if not isinstance(bm.get("num_id"), int):
+            max_num += 1
+            bm["num_id"] = max_num
+            _num_to_bid[max_num] = bid
+    _bm_counter = max_num
+    log.info("Num index rebuilt: %d bookmakers, max_id=%d", len(_num_to_bid), _bm_counter)
 
 # ---------------------------------------------------------------------------
 # SFS2X Decoder
@@ -835,9 +866,14 @@ def list_bm():
 
 @app.route("/api/aviator/bookmakers", methods=["POST"])
 def create_bm():
+    global _bm_counter
     d = request.get_json(force=True)
     bid = str(uuid.uuid4())[:12]
+    _bm_counter += 1
+    nid = _bm_counter
+    _num_to_bid[nid] = bid
     bm = {
+        "num_id": nid,
         "name": d.get("name", "Sin Nombre"),
         "description": d.get("description", ""),
         "image_url": d.get("image_url", ""),
@@ -878,6 +914,30 @@ def get_crashes(bid):
     if bid not in bookmakers: return jsonify({"error": "Not found"}), 404
     limit = request.args.get("limit", 100, type=int)
     return jsonify(crashes.get(bid, [])[-limit:])
+
+@app.route("/api/aviator/rounds/<int:num_id>", methods=["GET"])
+def get_rounds_by_num(num_id):
+    """
+    Endpoint estilo aviator-szte: GET /api/aviator/rounds/<num_id>?limit=10
+    Permite acceder a crashes de un bookmaker por su ID numérico corto.
+    Ejemplo: /api/aviator/rounds/2?limit=50
+    """
+    bid = _num_to_bid.get(num_id)
+    if not bid or bid not in bookmakers:
+        return jsonify({"error": f"Bookmaker #{num_id} not found"}), 404
+    limit = request.args.get("limit", 100, type=int)
+    bm = bookmakers[bid]
+    data = crashes.get(bid, [])[-limit:]
+    return jsonify({
+        "num_id": num_id,
+        "id": bid,
+        "name": bm.get("name", bid),
+        "description": bm.get("description", ""),
+        "image_url": bm.get("image_url", ""),
+        "connection_status": connection_status.get(bid, "disconnected"),
+        "crash_count": len(crashes.get(bid, [])),
+        "crashes": data,
+    })
 
 @app.route("/api/aviator/bookmakers/<bid>/crashes/stream")
 def stream_crashes(bid):
