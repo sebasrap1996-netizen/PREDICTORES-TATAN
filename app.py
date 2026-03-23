@@ -740,20 +740,45 @@ def _start_ws(bm_id):
         _store_dbg(bm_id, dbg)
 
     def on_error(ws, error):
-        # Solo loguear — on_close manejará el estado y la reconexión
-        log.error("[%s] ✗ ERROR: %s", name, error)
+        err_str = str(error)
+        log.error("[%s] ✗ ERROR: %s", name, err_str)
+        # Diagnóstico detallado según tipo de error
+        if "Connection refused" in err_str:
+            log.error("[%s] ▶ DIAGNÓSTICO: Servidor rechazó la conexión. Verifica la URL wss://", name)
+        elif "timed out" in err_str.lower() or "timeout" in err_str.lower():
+            log.error("[%s] ▶ DIAGNÓSTICO: Timeout — servidor no responde. Posible IP bloqueada en Render.", name)
+        elif "SSL" in err_str or "certificate" in err_str.lower():
+            log.error("[%s] ▶ DIAGNÓSTICO: Error SSL. Intentando reconectar con ssl_opt desactivado.", name)
+        elif "403" in err_str or "Forbidden" in err_str:
+            log.error("[%s] ▶ DIAGNÓSTICO: HTTP 403 — servidor rechaza los headers. Verifica Origin/Host.", name)
+        elif "101" not in err_str and "handshake" in err_str.lower():
+            log.error("[%s] ▶ DIAGNÓSTICO: Handshake WS fallido. El servidor puede requerir subprotocolo específico.", name)
+        # NO pisar connection_status aquí — on_close lo maneja correctamente.
+        # on_error siempre va seguido de on_close, así que el estado se actualiza ahí.
 
     def on_close(ws, code, msg):
-        log.info("[%s] CLOSED code=%s | handshake=%s login=%s step=%s | sent=%d bin=%d txt=%d",
-                 name, code,
+        log.info("[%s] CLOSED code=%s msg=%s | handshake=%s login=%s step=%s | sent=%d bin=%d txt=%d",
+                 name, code, msg,
                  auth_state["handshake_done"], auth_state["login_done"], auth_state["step"],
                  stats["sent"], stats["recv_bin"], stats["recv_txt"])
+        # Diagnóstico según código de cierre
+        if code == 1006:
+            log.error("[%s] ▶ DIAGNÓSTICO código 1006: Cierre anormal — sin respuesta del servidor. "
+                      "Posibles causas: URL incorrecta, IP bloqueada, servidor caído, headers faltantes.", name)
+        elif code == 1008:
+            log.error("[%s] ▶ DIAGNÓSTICO código 1008: Policy Violation — el servidor rechazó por policy. "
+                      "Verifica que los mensajes Base64 sean correctos.", name)
+        elif code == 1003:
+            log.error("[%s] ▶ DIAGNÓSTICO código 1003: Tipo de dato no aceptado por el servidor.", name)
+        elif code is None and stats["recv_bin"] == 0 and stats["recv_txt"] == 0:
+            log.error("[%s] ▶ DIAGNÓSTICO: Cerró sin recibir NINGÚN frame. "
+                      "El servidor no completó el handshake WebSocket. "
+                      "Revisa: 1) URL wss:// correcta  2) Headers Origin/Host  3) msg1 Base64 válido.", name)
         # Ignorar si este hilo ya está obsoleto
         if ws_generation.get(bm_id) != gen:
             log.debug("[%s] on_close: hilo obsoleto gen=%d, ignorando", name, gen)
             return
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
-            # Va a reconectar — mostrar "connecting" para que la UI no muestre error
             connection_status[bm_id] = "connecting"
             log.info("[%s] Reconnect en 5s...", name)
             def _reconnect():
@@ -764,13 +789,39 @@ def _start_ws(bm_id):
         else:
             connection_status[bm_id] = "disconnected"
 
+    # Headers de navegador real — evita que el servidor rechace la conexión por bot detection
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(ws_url)
+        origin_host = f"{parsed.scheme.replace('wss','https').replace('ws','http')}://{parsed.netloc}"
+    except Exception:
+        origin_host = "https://spribegaming.com"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Origin": origin_host,
+        "Host": ws_url.split("/")[2] if "//" in ws_url else ws_url,
+        "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    log.info("[%s] Headers WebSocket: Origin=%s Host=%s", name, headers["Origin"], headers["Host"])
+
+    import ssl as _ssl
+    ssl_opts = {"cert_reqs": _ssl.CERT_NONE, "check_hostname": False}
+
     ws_app = websocket.WebSocketApp(
-        ws_url, on_open=on_open, on_message=on_message,
+        ws_url,
+        on_open=on_open, on_message=on_message,
         on_error=on_error, on_close=on_close,
+        header=headers,
     )
     ws_connections[bm_id] = ws_app
-    t = threading.Thread(target=ws_app.run_forever,
-                         kwargs={"ping_interval": 20, "ping_timeout": 10}, daemon=True)
+    t = threading.Thread(
+        target=ws_app.run_forever,
+        kwargs={"ping_interval": 20, "ping_timeout": 10, "sslopt": ssl_opts},
+        daemon=True,
+    )
     t.start()
     ws_threads[bm_id] = t
 
@@ -860,7 +911,9 @@ def list_bm():
     for bid, bm in bookmakers.items():
         item = {**bm, "id": bid}
         item["connection_status"] = connection_status.get(bid, "disconnected")
-        item["crash_count"] = len(crashes.get(bid, []))
+        bm_crashes = crashes.get(bid, [])
+        item["crash_count"] = len(bm_crashes)
+        item["last_crash_at"] = bm_crashes[-1]["timestamp"] if bm_crashes else None
         r.append(item)
     return jsonify(r)
 
@@ -980,7 +1033,7 @@ def health():
     return jsonify({
         "status": "ok",
         "bookmakers": len(bookmakers),
-        "active_connections": sum(1 for s in connection_status.values() if s == "connected"),
+        "active_connections": sum(1 for s in connection_status.values() if s in ("connected", "connecting")),
         "total_crashes": sum(len(v) for v in crashes.values()),
     })
 
