@@ -685,25 +685,27 @@ def _start_ws(bm_id):
 
     def on_error(ws, error):
         log.error("[%s] ✗ ERROR: %s", name, error)
-        connection_status[bm_id] = "error"
+        # Solo actualizar estado si este hilo sigue siendo el activo
+        if ws_generation.get(bm_id) == gen:
+            connection_status[bm_id] = "error"
 
     def on_close(ws, code, msg):
         log.info("[%s] CLOSED code=%s | handshake=%s login=%s step=%s | sent=%d bin=%d txt=%d",
                  name, code,
                  auth_state["handshake_done"], auth_state["login_done"], auth_state["step"],
                  stats["sent"], stats["recv_bin"], stats["recv_txt"])
+        # Solo tocar el estado y reconectar si este hilo sigue siendo el activo
+        if ws_generation.get(bm_id) != gen:
+            log.debug("[%s] on_close: hilo obsoleto gen=%d, ignorando", name, gen)
+            return
         connection_status[bm_id] = "disconnected"
-        # Solo reconectar si este hilo sigue siendo el activo
-        if ws_generation.get(bm_id) == gen and bm_id in bookmakers and bookmakers[bm_id].get("active", False):
+        if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
             log.info("[%s] Reconnect in 5s...", name)
             def _reconnect():
                 time.sleep(5)
-                # Re-verificar que sigue siendo el activo después del sleep
                 if ws_generation.get(bm_id) == gen and bm_id in bookmakers and bookmakers[bm_id].get("active", False):
                     _start_ws(bm_id)
             threading.Thread(target=_reconnect, daemon=True).start()
-        else:
-            log.debug("[%s] on_close: stale gen %d, skip reconnect", name, gen)
 
     ws_app = websocket.WebSocketApp(
         ws_url, on_open=on_open, on_message=on_message,
