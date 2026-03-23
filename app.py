@@ -27,7 +27,10 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 # Stores
 # ---------------------------------------------------------------------------
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+# Disco persistente de Render (/data) si existe, si no directorio local
+_DATA_DIR   = "/data" if os.path.isdir("/data") else os.path.dirname(__file__)
+CONFIG_PATH  = os.path.join(_DATA_DIR, "config.json")
+CRASHES_PATH = os.path.join(_DATA_DIR, "crashes.json")
 bookmakers: dict = {}
 crashes: dict = defaultdict(list)
 ws_connections: dict = {}
@@ -53,6 +56,17 @@ def _load_config():
             return
         except Exception as e:
             log.error("Failed to load from BOOKMAKERS_JSON env var: %s", e)
+
+    # 1b. Cargar crashes desde crashes.json si existe
+    if os.path.exists(CRASHES_PATH):
+        try:
+            with open(CRASHES_PATH) as f:
+                saved = json.load(f)
+            for k, v in saved.items():
+                crashes[k] = v
+            log.info("Loaded crashes from %s (%d bookmakers)", CRASHES_PATH, len(saved))
+        except Exception as e:
+            log.error("crashes load fail: %s", e)
 
     # 2. Fallback: archivo local config.json (desarrollo local / primer deploy)
     if os.path.exists(CONFIG_PATH):
@@ -80,6 +94,15 @@ def _save_config():
                       f, indent=2, default=str)
     except Exception as e:
         log.error("Save fail: %s", e)
+
+def _save_crashes():
+    """Guarda crashes en disco persistente."""
+    try:
+        slim = {k: v[-30:] for k, v in crashes.items()}
+        with open(CRASHES_PATH, "w") as f:
+            json.dump(slim, f, default=str)
+    except Exception as e:
+        log.error("crashes save fail: %s", e)
 
 # ---------------------------------------------------------------------------
 # SFS2X Decoder
