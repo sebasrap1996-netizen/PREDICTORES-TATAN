@@ -23,6 +23,8 @@
   --red-dim: rgba(239, 68, 68, 0.15);
   --blue: #3b82f6;
   --blue-dim: rgba(59, 130, 246, 0.15);
+  --purple: #a78bfa;
+  --purple-dim: rgba(167, 139, 250, 0.15);
   --text: #e2e8f0;
   --text-dim: #64748b;
   --text-muted: #475569;
@@ -40,7 +42,6 @@ body {
   overflow-x: hidden;
 }
 
-/* --- Animated bg --- */
 body::before {
   content: '';
   position: fixed;
@@ -54,10 +55,9 @@ body::before {
 }
 @keyframes drift { to { transform: translate(5%, 3%) rotate(2deg); } }
 
-/* --- Layout --- */
-.shell { max-width: 1280px; margin: 0 auto; padding: 24px 20px; position: relative; z-index: 1; }
+.shell { max-width: 1400px; margin: 0 auto; padding: 24px 20px; position: relative; z-index: 1; }
 
-/* --- Header --- */
+/* Header */
 header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 20px 0 28px; border-bottom: 1px solid var(--border);
@@ -84,7 +84,7 @@ header {
 .health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-/* --- Buttons --- */
+/* Buttons */
 .btn {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 10px 20px; border-radius: 10px; border: none;
@@ -103,9 +103,11 @@ header {
 .btn-ghost:hover { border-color: var(--text-dim); color: var(--text); }
 .btn-red { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
 .btn-red:hover { background: rgba(239,68,68,0.25); }
+.btn-blue { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(59,130,246,0.2); }
+.btn-blue:hover { background: rgba(59,130,246,0.25); }
 .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
 
-/* --- Cards --- */
+/* Cards */
 .card {
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: 16px; padding: 24px; margin-bottom: 20px;
@@ -118,7 +120,7 @@ header {
 }
 .card-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
 
-/* --- Form --- */
+/* Form */
 .form-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
 }
@@ -139,7 +141,7 @@ input:focus, textarea:focus, select:focus {
 textarea { resize: vertical; min-height: 42px; }
 select { appearance: none; cursor: pointer; }
 
-.toggle-row { display: flex; align-items: center; gap: 20px; padding-top: 8px; }
+.toggle-row { display: flex; align-items: center; gap: 20px; padding-top: 8px; flex-wrap: wrap; }
 .toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 .toggle input { display: none; }
 .toggle-track {
@@ -154,14 +156,14 @@ select { appearance: none; cursor: pointer; }
 }
 .toggle input:checked + .toggle-track::after { transform: translateX(18px); }
 
-/* --- Table --- */
+/* Table */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th {
   text-align: left; padding: 12px 16px; font-size: 11px;
   text-transform: uppercase; letter-spacing: 0.8px;
   color: var(--text-muted); border-bottom: 1px solid var(--border);
-  font-weight: 600;
+  font-weight: 600; white-space: nowrap;
 }
 td {
   padding: 14px 16px; border-bottom: 1px solid var(--border);
@@ -181,7 +183,20 @@ tr:hover td { background: var(--bg-card-hover); }
 
 .rec-star { color: var(--gold); font-size: 16px; }
 
-/* --- Crashes panel --- */
+/* BM Logo img */
+.bm-logo {
+  width: 32px; height: 32px; border-radius: 8px; object-fit: cover;
+  border: 1px solid var(--border); background: var(--bg-input);
+  display: inline-block; vertical-align: middle;
+}
+.bm-logo-placeholder {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 16px; vertical-align: middle;
+}
+
+/* Crashes panel */
 .crashes-panel {
   background: var(--bg-input); border: 1px solid var(--border);
   border-radius: 12px; padding: 16px; margin-top: 16px;
@@ -198,7 +213,58 @@ tr:hover td { background: var(--bg-card-hover); }
 .crash-high { background: var(--gold-glow); color: var(--gold); }
 .crash-mega { background: var(--red-dim); color: var(--red); }
 
-/* --- Modal overlay --- */
+/* API Docs section */
+.api-section { margin-bottom: 20px; }
+.api-endpoints { display: grid; gap: 10px; }
+.api-endpoint {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; border-radius: 10px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  transition: border-color 0.2s;
+}
+.api-endpoint:hover { border-color: rgba(245,158,11,0.2); }
+.method-badge {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  padding: 3px 8px; border-radius: 6px; letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.method-get { background: var(--green-dim); color: var(--green); }
+.method-post { background: var(--blue-dim); color: var(--blue); }
+.method-put { background: var(--gold-glow); color: var(--gold); }
+.method-delete { background: var(--red-dim); color: var(--red); }
+.api-url {
+  font-family: var(--font-mono); font-size: 12px; color: var(--purple);
+  background: var(--purple-dim); padding: 3px 10px; border-radius: 6px;
+  border: 1px solid rgba(167,139,250,0.2);
+}
+.api-desc { font-size: 12px; color: var(--text-dim); flex: 1; }
+
+/* Dynamic URLs section */
+.dynamic-urls { margin-top: 16px; }
+.dynamic-url-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  margin-bottom: 8px; flex-wrap: wrap; gap: 8px;
+}
+.dynamic-url-bm { font-weight: 600; font-size: 12px; color: var(--gold); min-width: 120px; }
+.dynamic-url-link {
+  font-family: var(--font-mono); font-size: 11px; color: var(--blue);
+  word-break: break-all; flex: 1;
+  text-decoration: none;
+}
+.dynamic-url-link:hover { text-decoration: underline; color: var(--purple); }
+
+/* Copy btn */
+.copy-btn {
+  background: transparent; border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  font-size: 11px; color: var(--text-dim); transition: all 0.2s;
+  font-family: var(--font-sans);
+}
+.copy-btn:hover { border-color: var(--gold); color: var(--gold); }
+
+/* Modal overlay */
 .modal-overlay {
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
@@ -207,14 +273,23 @@ tr:hover td { background: var(--bg-card-hover); }
 .modal-overlay.active { display: grid; }
 .modal {
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 20px; padding: 32px; width: 95%; max-width: 680px;
+  border-radius: 20px; padding: 32px; width: 95%; max-width: 720px;
   max-height: 90vh; overflow-y: auto;
   box-shadow: 0 24px 80px rgba(0,0,0,0.6);
 }
 .modal h2 { font-size: 20px; font-weight: 700; margin-bottom: 24px; }
 .modal h2 span { color: var(--gold); }
 
-/* --- Toast --- */
+/* Image preview */
+.img-preview-wrap { margin-top: 8px; }
+.img-preview {
+  width: 48px; height: 48px; border-radius: 10px;
+  object-fit: cover; border: 1px solid var(--border);
+  display: none;
+}
+.img-preview.visible { display: block; }
+
+/* Toast */
 .toast-container { position: fixed; top: 20px; right: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
 .toast {
   padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 600;
@@ -223,20 +298,38 @@ tr:hover td { background: var(--bg-card-hover); }
 }
 .toast-success { background: var(--green-dim); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
 .toast-error { background: var(--red-dim); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+.toast-info { background: var(--blue-dim); color: var(--blue); border: 1px solid rgba(59,130,246,0.3); }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
-/* --- Empty state --- */
-.empty-state {
-  text-align: center; padding: 60px 20px; color: var(--text-muted);
-}
+/* Empty state */
+.empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
 .empty-state .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
 .empty-state p { font-size: 14px; }
 
-/* --- Crash viewer --- */
+/* Crash viewer */
 .viewer-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; animation: pulse 1s infinite; margin-right: 6px; }
 
-/* --- Scrollbar --- */
+/* Section tabs */
+.section-tabs {
+  display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.section-tab {
+  padding: 8px 18px; border-radius: 10px; border: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  background: transparent; color: var(--text-dim); transition: all 0.2s;
+  font-family: var(--font-sans);
+}
+.section-tab.active {
+  background: var(--gold-glow); border-color: rgba(245,158,11,0.4);
+  color: var(--gold);
+}
+.section-tab:hover:not(.active) { border-color: var(--text-dim); color: var(--text); }
+
+.section-content { display: none; }
+.section-content.active { display: block; }
+
+/* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -261,62 +354,162 @@ tr:hover td { background: var(--bg-card-hover); }
     </div>
   </header>
 
-  <!-- Toolbar -->
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
-    <div style="font-size:14px; color:var(--text-dim);" id="bmCount">0 bookmakers</div>
-    <button class="btn btn-gold" onclick="openModal()">
-      <span>＋</span> Nuevo Bookmaker
-    </button>
+  <!-- Section Tabs -->
+  <div class="section-tabs">
+    <button class="section-tab active" onclick="switchTab('bookmakers')">🛩️ Bookmakers</button>
+    <button class="section-tab" onclick="switchTab('api')">📡 API & Endpoints</button>
   </div>
 
-  <!-- Bookmakers Table -->
-  <div class="card" id="tableCard">
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Nombre</th>
-            <th>Estado</th>
-            <th>Decoder</th>
-            <th>Crashes</th>
-            <th>Rec.</th>
-            <th style="text-align:right">Acciones</th>
-          </tr>
-        </thead>
-        <tbody id="bmTableBody">
-        </tbody>
-      </table>
+  <!-- === TAB: BOOKMAKERS === -->
+  <div id="tab-bookmakers" class="section-content active">
+    <!-- Toolbar -->
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
+      <div style="font-size:14px; color:var(--text-dim);" id="bmCount">0 bookmakers</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" onclick="exportConfig()" title="Exportar config para Render">📋 Exportar Config</button>
+        <button class="btn btn-gold" onclick="openModal()">
+          <span>＋</span> Nuevo Bookmaker
+        </button>
+      </div>
     </div>
-    <div class="empty-state" id="emptyState">
-      <div class="icon">🛩️</div>
-      <p>Sin bookmakers. Agrega uno para empezar a capturar.</p>
+
+    <!-- Bookmakers Table -->
+    <div class="card" id="tableCard">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>ID</th>
+              <th>Nombre</th>
+              <th>Descripción</th>
+              <th>Estado</th>
+              <th>Decoder</th>
+              <th>Crashes</th>
+              <th>Rec.</th>
+              <th style="text-align:right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="bmTableBody">
+          </tbody>
+        </table>
+      </div>
+      <div class="empty-state" id="emptyState">
+        <div class="icon">🛩️</div>
+        <p>Sin bookmakers. Agrega uno para empezar a capturar.</p>
+      </div>
+    </div>
+
+    <!-- Live Crash Viewer -->
+    <div class="card" id="crashViewer" style="display:none;">
+      <div class="viewer-header">
+        <div>
+          <span class="card-title"><span class="live-dot"></span> Crashes en vivo — <span id="viewerName"></span></span>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="closeCrashViewer()">Cerrar</button>
+      </div>
+      <div class="crashes-panel" id="crashesContainer"></div>
+    </div>
+
+    <!-- Debug Frame Viewer -->
+    <div class="card" id="debugPanel" style="display:none;">
+      <div class="viewer-header">
+        <div>
+          <span class="card-title">🔍 Debug Frames — <span id="debugName"></span></span>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;" id="debugStatus"></div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="refreshDebug()">Refrescar</button>
+          <button class="btn btn-ghost btn-sm" onclick="closeDebug()">Cerrar</button>
+        </div>
+      </div>
+      <div class="crashes-panel" id="debugContainer" style="max-height:500px;font-size:11px;line-height:1.6;"></div>
     </div>
   </div>
 
-  <!-- Live Crash Viewer -->
-  <div class="card" id="crashViewer" style="display:none;">
-    <div class="viewer-header">
-      <div>
-        <span class="card-title"><span class="live-dot"></span> Crashes en vivo — <span id="viewerName"></span></span>
+  <!-- === TAB: API & ENDPOINTS === -->
+  <div id="tab-api" class="section-content">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📡 Endpoints Disponibles</div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="closeCrashViewer()">Cerrar</button>
+      <div class="api-endpoints">
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/api/aviator/bookmakers</span>
+          <span class="api-desc">Obtener todos los bookmakers</span>
+          <button class="copy-btn" onclick="copyText('/api/aviator/bookmakers')">Copiar</button>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/api/aviator/bookmakers/:id</span>
+          <span class="api-desc">Obtener un bookmaker específico</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-post">POST</span>
+          <span class="api-url">/api/aviator/bookmakers</span>
+          <span class="api-desc">Crear un nuevo bookmaker</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-put">PUT</span>
+          <span class="api-url">/api/aviator/bookmakers/:id</span>
+          <span class="api-desc">Actualizar un bookmaker existente</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-delete">DELETE</span>
+          <span class="api-url">/api/aviator/bookmakers/:id</span>
+          <span class="api-desc">Eliminar un bookmaker</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/api/aviator/bookmakers/:id/crashes</span>
+          <span class="api-desc">Historial de crashes de un bookmaker</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/api/aviator/bookmakers/:id/crashes/stream</span>
+          <span class="api-desc">Stream SSE de crashes en tiempo real</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/api/aviator/bookmakers/:id/debug</span>
+          <span class="api-desc">Frames raw de debug del WebSocket</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-post">POST</span>
+          <span class="api-url">/api/aviator/bookmakers/:id/ingest</span>
+          <span class="api-desc">Ingestar crash desde DOM scraper externo</span>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/api/export-config</span>
+          <span class="api-desc">Exportar config JSON para variable de entorno Render</span>
+          <button class="copy-btn" onclick="copyText('/api/export-config')">Copiar</button>
+        </div>
+        <div class="api-endpoint">
+          <span class="method-badge method-get">GET</span>
+          <span class="api-url">/health</span>
+          <span class="api-desc">Estado del servidor y conexiones activas</span>
+          <button class="copy-btn" onclick="copyText('/health')">Copiar</button>
+        </div>
+      </div>
     </div>
-    <div class="crashes-panel" id="crashesContainer"></div>
-  </div>
 
-  <!-- Debug Frame Viewer -->
-  <div class="card" id="debugPanel" style="display:none;">
-    <div class="viewer-header">
-      <div>
-        <span class="card-title">🔍 Debug Frames — <span id="debugName"></span></span>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;" id="debugStatus"></div>
+    <!-- Dynamic URLs by Bookmaker -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🔗 URLs Dinámicas por Bookmaker</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadDynamicUrls()">Actualizar</button>
       </div>
-      <div style="display:flex;gap:8px;">
-        <button class="btn btn-ghost btn-sm" onclick="refreshDebug()">Refrescar</button>
-        <button class="btn btn-ghost btn-sm" onclick="closeDebug()">Cerrar</button>
+      <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;">
+        URLs específicas generadas automáticamente para cada bookmaker configurado.
+      </p>
+      <div id="dynamicUrlsContainer">
+        <div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px;">
+          Cargando bookmakers...
+        </div>
       </div>
     </div>
-    <div class="crashes-panel" id="debugContainer" style="max-height:500px;font-size:11px;line-height:1.6;"></div>
   </div>
 </div>
 
@@ -327,7 +520,7 @@ tr:hover td { background: var(--bg-card-hover); }
     <input type="hidden" id="editId">
     <div class="form-grid">
       <div class="form-group">
-        <label>Nombre</label>
+        <label>Nombre *</label>
         <input type="text" id="fName" placeholder="ej. 1xBet Aviator">
       </div>
       <div class="form-group">
@@ -343,7 +536,14 @@ tr:hover td { background: var(--bg-card-hover); }
         <input type="text" id="fDesc" placeholder="Descripción opcional">
       </div>
       <div class="form-group full">
-        <label>URL WebSocket</label>
+        <label>URL Imagen (opcional)</label>
+        <input type="text" id="fImageUrl" placeholder="https://..." oninput="previewImage()">
+        <div class="img-preview-wrap">
+          <img id="imgPreview" class="img-preview" alt="Preview" onerror="this.classList.remove('visible')">
+        </div>
+      </div>
+      <div class="form-group full">
+        <label>URL WebSocket *</label>
         <input type="text" id="fWsUrl" placeholder="wss://sa-east-1-game5.spribegaming.com/BlueBox/websocket">
       </div>
       <div class="form-group full">
@@ -387,6 +587,7 @@ tr:hover td { background: var(--bg-card-hover); }
 const API = '/api/aviator/bookmakers';
 let sseSource = null;
 let currentViewerId = null;
+let allBookmakers = [];
 
 // --- Toast ---
 function toast(msg, type = 'success') {
@@ -395,6 +596,17 @@ function toast(msg, type = 'success') {
   el.textContent = msg;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// --- Tab switching ---
+function switchTab(name) {
+  document.querySelectorAll('.section-tab').forEach((t, i) => {
+    const tabs = ['bookmakers', 'api'];
+    t.classList.toggle('active', tabs[i] === name);
+  });
+  document.querySelectorAll('.section-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'api') loadDynamicUrls();
 }
 
 // --- API helpers ---
@@ -408,10 +620,47 @@ async function apiFetch(url, opts = {}) {
   }
 }
 
+// --- Copy to clipboard ---
+function copyText(text) {
+  const full = window.location.origin + text;
+  navigator.clipboard.writeText(full).then(() => {
+    toast('URL copiada al portapapeles', 'info');
+  }).catch(() => {
+    toast('No se pudo copiar', 'error');
+  });
+}
+
+// --- Image preview in modal ---
+function previewImage() {
+  const url = document.getElementById('fImageUrl').value.trim();
+  const img = document.getElementById('imgPreview');
+  if (url) {
+    img.src = url;
+    img.classList.add('visible');
+  } else {
+    img.classList.remove('visible');
+  }
+}
+
+// --- Export Config ---
+async function exportConfig() {
+  try {
+    const r = await fetch('/api/export-config');
+    const d = await r.json();
+    const json = JSON.stringify(d);
+    navigator.clipboard.writeText(json).then(() => {
+      toast('Config copiada al portapapeles. Pégala en BOOKMAKERS_JSON de Render.', 'info');
+    });
+  } catch (e) {
+    toast('Error exportando config', 'error');
+  }
+}
+
 // --- Load bookmakers ---
 async function loadBm() {
   const data = await apiFetch(API);
   if (!data) return;
+  allBookmakers = data;
 
   const tbody = document.getElementById('bmTableBody');
   const empty = document.getElementById('emptyState');
@@ -424,12 +673,19 @@ async function loadBm() {
   }
   empty.style.display = 'none';
 
-  tbody.innerHTML = data.map(bm => `
+  tbody.innerHTML = data.map(bm => {
+    const logoHtml = bm.image_url
+      ? `<img src="${esc(bm.image_url)}" class="bm-logo" alt="${esc(bm.name)}" onerror="this.style.display='none'">`
+      : `<div class="bm-logo-placeholder">🛩️</div>`;
+    return `
     <tr>
+      <td style="width:40px;">${logoHtml}</td>
+      <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;" title="${esc(bm.id)}">${esc(bm.id)}</td>
       <td>
         <div style="font-weight:600;">${esc(bm.name)}</div>
-        <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);margin-top:2px;">${esc(bm.ws_url || '—').substring(0, 50)}...</div>
+        <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);margin-top:2px;">${esc((bm.ws_url || '—').substring(0, 45))}${bm.ws_url && bm.ws_url.length > 45 ? '…' : ''}</div>
       </td>
+      <td style="font-size:12px;color:var(--text-dim);max-width:160px;overflow:hidden;text-overflow:ellipsis;" title="${esc(bm.description || '')}">${esc(bm.description || '—')}</td>
       <td><span class="status-pill status-${bm.connection_status || 'disconnected'}">${statusIcon(bm.connection_status)} ${bm.connection_status || 'off'}</span></td>
       <td style="font-family:var(--font-mono);font-size:12px;">${esc(bm.decoder_type || 'auto')}</td>
       <td>
@@ -441,8 +697,49 @@ async function loadBm() {
         <button class="btn btn-ghost btn-sm" onclick="editBm('${bm.id}')">Editar</button>
         <button class="btn btn-red btn-sm" onclick="deleteBm('${bm.id}','${esc(bm.name)}')">Eliminar</button>
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
+}
+
+// --- Dynamic URLs for API tab ---
+async function loadDynamicUrls() {
+  const container = document.getElementById('dynamicUrlsContainer');
+  const base = window.location.origin;
+
+  if (!allBookmakers || allBookmakers.length === 0) {
+    const data = await apiFetch(API);
+    if (data) allBookmakers = data;
+  }
+
+  if (!allBookmakers || allBookmakers.length === 0) {
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px;">Sin bookmakers configurados. Agrega uno primero.</div>';
+    return;
+  }
+
+  const urlTypes = [
+    { suffix: '/crashes', label: 'Crashes' },
+    { suffix: '/crashes/stream', label: 'SSE Stream' },
+    { suffix: '/debug', label: 'Debug' },
+    { suffix: '/ingest', label: 'Ingest (POST)' },
+  ];
+
+  container.innerHTML = allBookmakers.map(bm => `
+    <div style="margin-bottom:16px;">
+      <div style="font-weight:700;font-size:13px;color:var(--gold);margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+        ${bm.image_url ? `<img src="${esc(bm.image_url)}" class="bm-logo" style="width:20px;height:20px;" onerror="this.style.display='none'">` : '🛩️'}
+        ${esc(bm.name)}
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;">[${esc(bm.id)}]</span>
+      </div>
+      ${urlTypes.map(u => {
+        const full = `${base}${API}/${bm.id}${u.suffix}`;
+        return `<div class="dynamic-url-item">
+          <span class="dynamic-url-bm">${u.label}</span>
+          <a href="${full}" target="_blank" class="dynamic-url-link">${full}</a>
+          <button class="copy-btn" onclick="navigator.clipboard.writeText('${full}').then(()=>toast('Copiado','info'))">Copiar</button>
+        </div>`;
+      }).join('')}
+    </div>
+  `).join('<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">');
 }
 
 function statusIcon(s) {
@@ -452,11 +749,11 @@ function statusIcon(s) {
   return '○';
 }
 
-function esc(s) { 
+function esc(s) {
   if (!s) return '';
-  const d = document.createElement('div'); 
-  d.textContent = s; 
-  return d.innerHTML; 
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 // --- Modal ---
@@ -464,14 +761,20 @@ function openModal(bm = null) {
   document.getElementById('editId').value = bm ? bm.id : '';
   document.getElementById('modalTitle').innerHTML = bm ? '<span>Editar</span> Bookmaker' : '<span>Nuevo</span> Bookmaker';
   document.getElementById('fName').value = bm ? bm.name : '';
-  document.getElementById('fDesc').value = bm ? bm.description : '';
+  document.getElementById('fDesc').value = bm ? (bm.description || '') : '';
+  document.getElementById('fImageUrl').value = bm ? (bm.image_url || '') : '';
   document.getElementById('fWsUrl').value = bm ? bm.ws_url : '';
-  document.getElementById('fMsg1').value = bm ? bm.msg1_b64 : '';
-  document.getElementById('fMsg2').value = bm ? bm.msg2_b64 : '';
-  document.getElementById('fMsg3').value = bm ? bm.msg3_b64 : '';
-  document.getElementById('fDecoder').value = bm ? bm.decoder_type : 'auto';
+  document.getElementById('fMsg1').value = bm ? (bm.msg1_b64 || '') : '';
+  document.getElementById('fMsg2').value = bm ? (bm.msg2_b64 || '') : '';
+  document.getElementById('fMsg3').value = bm ? (bm.msg3_b64 || '') : '';
+  document.getElementById('fDecoder').value = bm ? (bm.decoder_type || 'auto') : 'auto';
   document.getElementById('fActive').checked = bm ? bm.active : true;
   document.getElementById('fRec').checked = bm ? bm.recommended : false;
+  // Preview image
+  const img = document.getElementById('imgPreview');
+  const imgUrl = bm ? (bm.image_url || '') : '';
+  if (imgUrl) { img.src = imgUrl; img.classList.add('visible'); }
+  else { img.classList.remove('visible'); img.src = ''; }
   document.getElementById('modalOverlay').classList.add('active');
 }
 
@@ -480,9 +783,13 @@ function closeModal() {
 }
 
 async function editBm(id) {
-  const data = await apiFetch(API);
-  const bm = data?.find(b => b.id === id);
+  const bm = allBookmakers.find(b => b.id === id);
   if (bm) openModal(bm);
+  else {
+    const data = await apiFetch(API);
+    const found = data?.find(b => b.id === id);
+    if (found) openModal(found);
+  }
 }
 
 async function saveBm() {
@@ -490,6 +797,7 @@ async function saveBm() {
   const body = {
     name: document.getElementById('fName').value,
     description: document.getElementById('fDesc').value,
+    image_url: document.getElementById('fImageUrl').value,
     ws_url: document.getElementById('fWsUrl').value,
     msg1_b64: document.getElementById('fMsg1').value,
     msg2_b64: document.getElementById('fMsg2').value,
@@ -532,7 +840,7 @@ async function deleteBm(id, name) {
 
 // --- Crash Viewer with SSE ---
 const MAX_CRASHES_UI = 30;
-const seenIds = {};   // {bookmaker_id: Set} — dedup en memoria, vive toda la sesión
+const seenIds = {};
 
 function openCrashViewer(id, name) {
   closeCrashViewer();
@@ -544,19 +852,15 @@ function openCrashViewer(id, name) {
   const container = document.getElementById('crashesContainer');
   container.innerHTML = '';
 
-  // SSE: el servidor envía "init" con los últimos 30 al conectar,
-  // luego "message" por cada crash nuevo — todo en una sola conexión.
   function connectSSE() {
     if (sseSource) { sseSource.close(); sseSource = null; }
     sseSource = new EventSource(`${API}/${id}/crashes/stream`);
 
-    // Evento inicial: últimos 30 crashes del servidor (llega al conectar)
     sseSource.addEventListener('init', (e) => {
       try {
         const list = JSON.parse(e.data);
         container.innerHTML = '';
         seenIds[id].clear();
-        // list viene antiguo→nuevo; prepend deja el más reciente arriba
         list.forEach(c => {
           seenIds[id].add(c.id);
           renderCrash(c, container);
@@ -564,14 +868,12 @@ function openCrashViewer(id, name) {
       } catch {}
     });
 
-    // Crash nuevo en tiempo real
     sseSource.onmessage = (e) => {
       try {
         const crash = JSON.parse(e.data);
         if (seenIds[id].has(crash.id)) return;
         seenIds[id].add(crash.id);
         renderCrash(crash, container);
-        // Mantener solo 30 visibles
         while (container.children.length > MAX_CRASHES_UI) container.lastChild.remove();
         container.scrollTop = 0;
         loadBm();
@@ -580,7 +882,6 @@ function openCrashViewer(id, name) {
 
     sseSource.onerror = () => {
       sseSource.close(); sseSource = null;
-      // Reconectar en 2s — al reconectar el servidor vuelve a enviar "init"
       if (currentViewerId === id) setTimeout(connectSSE, 2000);
     };
   }
@@ -601,7 +902,6 @@ function renderCrash(c, container) {
   container.prepend(el);
 }
 
-// Mantener compatibilidad con cualquier llamada a appendCrash
 function appendCrash(c) { renderCrash(c, document.getElementById('crashesContainer')); }
 
 function closeCrashViewer() {
