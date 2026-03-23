@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Aviator scraping - Dashboard</title>
+<title>Aviator Scraping — Dashboard v7</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -15,49 +15,66 @@ body {
   padding: 24px 16px;
 }
 
-.container { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+.container { max-width: 1060px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
 
 /* ── Card ── */
 .card { background: #1f2937; border-radius: 12px; padding: 24px; }
 
 /* ── Card header ── */
-.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
 .card-header h2 { font-size: 20px; font-weight: 700; color: #f9fafb; }
+.header-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* ── Button Nuevo Bookmaker ── */
+/* ── Buttons ── */
 .btn-new {
   display: inline-flex; align-items: center; gap: 6px;
   background: #2563eb; color: #fff; border: none; border-radius: 8px;
   padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
 }
 .btn-new:hover { background: #1d4ed8; }
+.btn-danger {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #dc2626; color: #fff; border: none; border-radius: 8px;
+  padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s;
+}
+.btn-danger:hover { background: #b91c1c; }
 
 /* ── Table ── */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 thead tr { border-bottom: 1px solid #374151; }
-th { text-align: left; padding: 12px 16px; font-size: 13px; font-weight: 600; color: #9ca3af; }
-td { padding: 14px 16px; font-size: 14px; color: #e5e7eb; border-bottom: 1px solid #374151; vertical-align: middle; }
+th { text-align: left; padding: 12px 10px; font-size: 12px; font-weight: 600; color: #9ca3af; white-space: nowrap; }
+td { padding: 12px 10px; font-size: 13px; color: #e5e7eb; border-bottom: 1px solid #374151; vertical-align: middle; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: #263040; }
-.td-id { color: #9ca3af; }
+.td-id { color: #9ca3af; font-weight: 600; }
 .td-name { font-weight: 700; color: #f9fafb; }
-.td-desc { color: #9ca3af; }
+.td-desc { color: #9ca3af; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Badges ── */
-.badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge-connected    { background: #065f46; color: #6ee7b7; }
+.badge-connecting   { background: #78350f; color: #fbbf24; }
+.badge-reconnecting { background: #78350f; color: #fbbf24; }
+.badge-disconnected { background: #374151; color: #9ca3af; }
+.badge-error        { background: #7f1d1d; color: #fca5a5; }
 .badge-active   { background: #065f46; color: #6ee7b7; }
 .badge-inactive { background: #374151; color: #9ca3af; }
 .badge-rec      { background: #92400e; color: #fbbf24; }
 .badge-norec    { background: #374151; color: #9ca3af; }
 
+.crash-count { font-family: 'Courier New', monospace; font-weight: 700; font-size: 14px; color: #fbbf24; }
+
 /* ── Action buttons ── */
-.btn-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 7px; border: none; cursor: pointer; transition: opacity 0.2s; font-size: 15px; }
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 6px; border: none; cursor: pointer; transition: opacity 0.2s; font-size: 13px; }
 .btn-icon:hover { opacity: 0.8; }
 .btn-edit   { background: #d97706; color: #fff; }
 .btn-delete { background: #dc2626; color: #fff; }
-.actions-cell { display: flex; gap: 8px; align-items: center; }
+.btn-view   { background: #2563eb; color: #fff; }
+.btn-debug  { background: #7c3aed; color: #fff; }
+.btn-clear  { background: #991b1b; color: #fca5a5; }
+.actions-cell { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
 
 /* ── Empty state ── */
 .empty-state { text-align: center; padding: 48px 20px; color: #6b7280; font-size: 14px; }
@@ -144,6 +161,9 @@ tbody tr:hover td { background: #263040; }
 .debug-container { max-height: 480px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.6; }
 .debug-btns { display: flex; gap: 8px; }
 
+/* ── Version tag ── */
+.version-tag { text-align: center; font-size: 11px; color: #4b5563; padding: 8px 0; }
+
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
@@ -156,7 +176,10 @@ tbody tr:hover td { background: #263040; }
   <div class="card">
     <div class="card-header">
       <h2>Gestión de Bookmakers</h2>
-      <button class="btn-new" onclick="openModal()">＋ Nuevo Bookmaker</button>
+      <div class="header-btns">
+        <button class="btn-danger" onclick="clearAllCrashes()" title="Limpiar crashes de todos los bookmakers">🗑 Limpiar Todo</button>
+        <button class="btn-new" onclick="openModal()">＋ Nuevo Bookmaker</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
@@ -164,9 +187,9 @@ tbody tr:hover td { background: #263040; }
           <tr>
             <th>ID</th>
             <th>Nombre</th>
-            <th>Descripción</th>
-            <th>Estado</th>
-            <th>Recomendado</th>
+            <th>Desc</th>
+            <th>Conexión</th>
+            <th>Crashes</th>
             <th>Acciones</th>
           </tr>
         </thead>
@@ -219,9 +242,23 @@ tbody tr:hover td { background: #263040; }
     <div class="endpoint-item">
       <div class="endpoint-top">
         <span class="method-badge m-get">GET</span>
-        <span class="endpoint-url">/api/aviator/bookmakers/:id</span>
+        <span class="endpoint-url">/api/aviator/rounds/:num_id?limit=N</span>
       </div>
-      <div class="endpoint-desc">Obtener un bookmaker específico</div>
+      <div class="endpoint-desc">Crashes por ID numérico (para PREDICTORES TATAN)</div>
+    </div>
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-post">POST</span>
+        <span class="endpoint-url">/api/aviator/bookmakers/:id/clear-crashes</span>
+      </div>
+      <div class="endpoint-desc">Limpiar crashes de un bookmaker</div>
+    </div>
+    <div class="endpoint-item">
+      <div class="endpoint-top">
+        <span class="method-badge m-post">POST</span>
+        <span class="endpoint-url">/api/clear-all-crashes</span>
+      </div>
+      <div class="endpoint-desc">Limpiar crashes de todos los bookmakers</div>
     </div>
     <div class="endpoint-item">
       <div class="endpoint-top">
@@ -248,10 +285,12 @@ tbody tr:hover td { background: #263040; }
     <!-- URLs dinámicas -->
     <div class="dynamic-section">
       <div class="section-sub">URLs Dinámicas por Bookmaker</div>
-      <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">Ejemplos de URLs específicas basadas en los bookmakers actuales:</p>
+      <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">URLs para consumir crashes en PREDICTORES TATAN:</p>
       <div id="dynamicUrls"></div>
     </div>
   </div>
+
+  <div class="version-tag">PREDICTORES TATAN — Scraping Manager v7.1 — Captura en tiempo real + Persistencia en disco</div>
 
 </div>
 
@@ -349,6 +388,13 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function connBadgeClass(status) {
+  if (status === 'connected') return 'badge-connected';
+  if (status === 'connecting' || status === 'reconnecting') return 'badge-connecting';
+  if (status === 'error') return 'badge-error';
+  return 'badge-disconnected';
+}
+
 // ── Load & render bookmakers ──
 async function loadBm() {
   const data = await apiFetch(API);
@@ -368,26 +414,25 @@ async function loadBm() {
   empty.style.display = 'none';
 
   tbody.innerHTML = data.map(bm => {
-    const isActive = bm.active !== false;
-    const isRec    = !!bm.recommended;
-    const nid      = bm.num_id != null ? bm.num_id : '—';
+    const nid    = bm.num_id != null ? bm.num_id : '—';
+    const status = bm.connection_status || 'disconnected';
+    const count  = bm.crash_count || 0;
     return `<tr>
       <td class="td-id">${nid}</td>
       <td class="td-name">${esc(bm.name)}</td>
       <td class="td-desc">${esc(bm.description) || '-'}</td>
       <td>
-        <span class="badge ${isActive ? 'badge-active' : 'badge-inactive'}">
-          <span class="badge-dot"></span>${isActive ? 'Activo' : 'Inactivo'}
+        <span class="badge ${connBadgeClass(status)}">
+          <span class="badge-dot"></span>${status}
         </span>
       </td>
-      <td>
-        <span class="badge ${isRec ? 'badge-rec' : 'badge-norec'}">
-          ${isRec ? 'Recomendado' : 'No recomendado'}
-        </span>
-      </td>
+      <td><span class="crash-count">${count}</span></td>
       <td>
         <div class="actions-cell">
+          <button class="btn-icon btn-view"   onclick="openCrashViewer('${bm.id}','${esc(bm.name)}')" title="Ver Crashes">📊</button>
+          <button class="btn-icon btn-debug"  onclick="openDebug('${bm.id}','${esc(bm.name)}')" title="Debug Frames">🔍</button>
           <button class="btn-icon btn-edit"   onclick="editBm('${bm.id}')" title="Editar">✎</button>
+          <button class="btn-icon btn-clear"  onclick="clearCrashes('${bm.id}','${esc(bm.name)}')" title="Limpiar Crashes">🧹</button>
           <button class="btn-icon btn-delete" onclick="deleteBm('${bm.id}','${esc(bm.name)}')" title="Eliminar">🗑</button>
         </div>
       </td>
@@ -488,8 +533,27 @@ async function deleteBm(id, name) {
   }
 }
 
+// ── Clear crashes ──
+async function clearCrashes(id, name) {
+  if (!confirm(`¿Limpiar todos los crashes de "${name}"?`)) return;
+  const result = await apiFetch(`${API}/${id}/clear-crashes`, { method: 'POST' });
+  if (result && result.ok) {
+    toast(`${result.cleared} crashes limpiados de ${name}`);
+    loadBm();
+  }
+}
+
+async function clearAllCrashes() {
+  if (!confirm('¿Limpiar crashes de TODOS los bookmakers?')) return;
+  const result = await apiFetch('/api/clear-all-crashes', { method: 'POST' });
+  if (result && result.ok) {
+    toast(`${result.cleared} crashes limpiados en total`);
+    loadBm();
+  }
+}
+
 // ── Crash viewer SSE ──
-const MAX_UI = 30;
+const MAX_UI = 50;
 const seenIds = {};
 
 function openCrashViewer(id, name) {
@@ -539,7 +603,8 @@ function renderCrash(c, container) {
   else if (m >= 2) cls = 'crash-mid';
   el.className = `crash-chip ${cls}`;
   el.textContent = `${m}x`;
-  el.title = c.timestamp ? new Date(c.timestamp).toLocaleTimeString('es-CO') : '';
+  el.title = (c.timestamp ? new Date(c.timestamp).toLocaleTimeString('es-CO') : '') +
+             (c.round_id ? ` (R:${c.round_id})` : '');
   container.prepend(el);
 }
 
@@ -573,6 +638,8 @@ async function refreshDebug() {
   }
   container.innerHTML = data.frames.map((f, i) => {
     const isText = f.type === 'TEXT';
+    const isCrash = f.frame_type && (f.frame_type.includes('crash') || f.frame_type.includes('crashX'));
+    const frameColor = isCrash ? '#fbbf24' : '#6b7280';
     const decoded = f.decoded
       ? `<div style="color:#a5b4fc;margin-top:4px;word-break:break-all;"><b>${esc(f.method||'?')}:</b> ${esc(String(f.decoded).substring(0,800))}</div>`
       : '<div style="color:#6b7280;margin-top:4px;">⚠ No decodificado</div>';
@@ -586,7 +653,7 @@ async function refreshDebug() {
       : `<div style="margin-top:6px;word-break:break-all;color:#6b7280;">HEX: ${esc(f.hex||'')}</div>`;
     return `<div style="border-bottom:1px solid #1f2937;padding:10px 0;">
       <div style="display:flex;justify-content:space-between;">
-        <span style="color:#fbbf24;font-weight:600;">Frame #${data.frames.length-i} [${isText?'TEXT':'BIN'}]</span>
+        <span style="color:${frameColor};font-weight:600;">Frame #${data.frames.length-i} [${isText?'TEXT':'BIN'}] ${f.frame_type||''}</span>
         <span style="color:#6b7280;font-size:10px;">${f.size} ${isText?'chars':'bytes'}</span>
       </div>${raw}${decoded}${mults}</div>`;
   }).reverse().join('');
@@ -604,7 +671,7 @@ document.getElementById('modalOverlay').addEventListener('click', (e) => {
 
 // ── Init ──
 loadBm();
-setInterval(loadBm, 15000);
+setInterval(loadBm, 10000);
 </script>
 </body>
 </html>
