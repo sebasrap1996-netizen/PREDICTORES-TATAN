@@ -840,6 +840,7 @@ def create_bm():
     bm = {
         "name": d.get("name", "Sin Nombre"),
         "description": d.get("description", ""),
+        "image_url": d.get("image_url", ""),
         "ws_url": d.get("ws_url", ""),
         "msg1_b64": d.get("msg1_b64", ""),
         "msg2_b64": d.get("msg2_b64", ""),
@@ -857,7 +858,7 @@ def create_bm():
 def update_bm(bid):
     if bid not in bookmakers: return jsonify({"error": "Not found"}), 404
     d = request.get_json(force=True); bm = bookmakers[bid]
-    for k in ("name","description","ws_url","msg1_b64","msg2_b64","msg3_b64",
+    for k in ("name","description","image_url","ws_url","msg1_b64","msg2_b64","msg3_b64",
               "decoder_type","active","recommended"):
         if k in d: bm[k] = d[k]
     bm["updated_at"] = datetime.now(timezone.utc).isoformat()
