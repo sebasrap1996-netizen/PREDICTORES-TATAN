@@ -531,63 +531,64 @@ async function deleteBm(id, name) {
 }
 
 // --- Crash Viewer with SSE ---
-const shownIds = new Set(); // IDs ya mostrados — persiste aunque se cierre el viewer
+const MAX_CRASHES_UI = 30;
+const seenIds = {};   // {bookmaker_id: Set} — dedup en memoria, vive toda la sesión
 
-async function openCrashViewer(id, name) {
+function openCrashViewer(id, name) {
   closeCrashViewer();
   currentViewerId = id;
   document.getElementById('viewerName').textContent = name;
   document.getElementById('crashViewer').style.display = '';
+  if (!seenIds[id]) seenIds[id] = new Set();
 
-  // Cargar últimos 30 crashes del servidor
-  // El API los devuelve del más antiguo al más nuevo.
-  // appendCrash usa prepend → iterar en orden normal deja el más reciente arriba.
-  const existing = await apiFetch(`${API}/${id}/crashes?limit=30`);
   const container = document.getElementById('crashesContainer');
   container.innerHTML = '';
-  shownIds.clear();
 
-  if (existing && existing.length > 0) {
-    // Iterar del más antiguo al más nuevo: prepend pone cada uno encima del anterior.
-    // Resultado: el más reciente queda en la posición más alta.
-    existing.forEach(c => {
-      shownIds.add(c.id);
-      appendCrash(c);
-    });
-  }
-
-  // Reconectar SSE — se reconecta automáticamente si la conexión cae
+  // SSE: el servidor envía "init" con los últimos 30 al conectar,
+  // luego "message" por cada crash nuevo — todo en una sola conexión.
   function connectSSE() {
     if (sseSource) { sseSource.close(); sseSource = null; }
     sseSource = new EventSource(`${API}/${id}/crashes/stream`);
 
+    // Evento inicial: últimos 30 crashes del servidor (llega al conectar)
+    sseSource.addEventListener('init', (e) => {
+      try {
+        const list = JSON.parse(e.data);
+        container.innerHTML = '';
+        seenIds[id].clear();
+        // list viene antiguo→nuevo; prepend deja el más reciente arriba
+        list.forEach(c => {
+          seenIds[id].add(c.id);
+          renderCrash(c, container);
+        });
+      } catch {}
+    });
+
+    // Crash nuevo en tiempo real
     sseSource.onmessage = (e) => {
       try {
         const crash = JSON.parse(e.data);
-        if (shownIds.has(crash.id)) return; // dedup
-        shownIds.add(crash.id);
-        appendCrash(crash);
-        // Mantener solo 30 visibles — borrar el más viejo (último del DOM)
-        while (container.children.length > 30) container.lastChild.remove();
-        // Scroll al tope
+        if (seenIds[id].has(crash.id)) return;
+        seenIds[id].add(crash.id);
+        renderCrash(crash, container);
+        // Mantener solo 30 visibles
+        while (container.children.length > MAX_CRASHES_UI) container.lastChild.remove();
         container.scrollTop = 0;
         loadBm();
-      } catch (err) {}
+      } catch {}
     };
 
     sseSource.onerror = () => {
-      // Reconectar en 3s si se cae la conexión SSE
-      if (currentViewerId === id) {
-        setTimeout(connectSSE, 3000);
-      }
+      sseSource.close(); sseSource = null;
+      // Reconectar en 2s — al reconectar el servidor vuelve a enviar "init"
+      if (currentViewerId === id) setTimeout(connectSSE, 2000);
     };
   }
 
   connectSSE();
 }
 
-function appendCrash(c) {
-  const container = document.getElementById('crashesContainer');
+function renderCrash(c, container) {
   const el = document.createElement('span');
   const m = c.multiplier;
   let cls = 'crash-low';
@@ -596,9 +597,12 @@ function appendCrash(c) {
   else if (m >= 2) cls = 'crash-mid';
   el.className = `crash-entry ${cls}`;
   el.textContent = `${m}x`;
-  el.title = new Date(c.timestamp).toLocaleTimeString() || '';
+  el.title = c.timestamp ? new Date(c.timestamp).toLocaleTimeString() : '';
   container.prepend(el);
 }
+
+// Mantener compatibilidad con cualquier llamada a appendCrash
+function appendCrash(c) { renderCrash(c, document.getElementById('crashesContainer')); }
 
 function closeCrashViewer() {
   if (sseSource) { sseSource.close(); sseSource = null; }
