@@ -9,4 +9,10 @@ services:
         value: "3.11.6"
       - key: PORT
         value: "10000"
+      - key: BOOKMAKERS_JSON
+        value: ""   # Solo para backup — con el disco persistente ya no es necesario
+    disk:
+      name: tatan-data
+      mountPath: /data
+      sizeGB: 1
     plan: free
