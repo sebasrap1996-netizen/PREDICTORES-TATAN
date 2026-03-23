@@ -1,9 +1,15 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v6 — Fixes:
-  1. _load_config lee BOOKMAKERS_JSON desde env var (Render ephemeral disk fix)
-  2. /health retorna active_connections y total_crashes (match con admin.html JS)
-  3. Nuevo endpoint GET /api/export-config para exportar config lista para Render
+v7.1 — Fixes:
+  1. Captura desde frame 0: TODOS los frames se procesan para game data
+     sin esperar handshake/login (los msgs de auth se envían en paralelo)
+  2. Filtrado estricto de crashes reales vs cashouts/ticks/estado
+  3. Persistencia: crashes se guardan en disco (crashes.json) tras cada nuevo crash
+     y se restauran al reiniciar el servidor → NO se pierde historial
+  4. Al reiniciar: carga crashes del disco y continúa capturando en tiempo real
+  5. _load_config lee BOOKMAKERS_JSON desde env var (Render ephemeral disk fix)
+  6. /health retorna active_connections y total_crashes
+  7. GET /api/export-config para exportar config lista para Render
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -39,12 +45,11 @@ def _cors_preflight(path):
 # ---------------------------------------------------------------------------
 # Stores
 # ---------------------------------------------------------------------------
-# Disco persistente de Render (/data) si existe, si no directorio local
 _DATA_DIR   = "/data" if os.path.isdir("/data") else os.path.dirname(__file__)
 CONFIG_PATH  = os.path.join(_DATA_DIR, "config.json")
 CRASHES_PATH = os.path.join(_DATA_DIR, "crashes.json")
 bookmakers: dict = {}
-crashes: dict = defaultdict(list)
+crashes: dict = defaultdict(list)  # Inicia vacío — captura desde 0
 ws_connections: dict = {}
 ws_threads: dict = {}
 sse_subscribers: dict = defaultdict(list)
@@ -53,41 +58,33 @@ debug_frames: dict = defaultdict(list)
 MAX_CRASHES = 1000
 MAX_DBG = 200
 
-# Contador numérico para IDs tipo /rounds/1, /rounds/2 — igual que aviator-szte
 _bm_counter: int = 0
-# Mapa num_id (int) → bid (uuid string) para lookup en /rounds/:num_id
 _num_to_bid: dict = {}
 
 def _load_config():
-    global bookmakers, crashes
+    """
+    Carga bookmakers Y crashes del disco.
+    Al reiniciar el servidor, restaura el historial guardado y continúa
+    capturando en tiempo real desde el último multiplicador.
+    """
+    global bookmakers
 
-    # 1. Prioridad: variable de entorno BOOKMAKERS_JSON (Render — disco efímero)
+    # 1. Prioridad: variable de entorno BOOKMAKERS_JSON (Render)
     env_json = os.environ.get("BOOKMAKERS_JSON", "").strip()
     if env_json:
         try:
             d = json.loads(env_json)
             bookmakers = d.get("bookmakers", {})
+            # Cargar crashes del env si vienen (backup)
             for k, v in d.get("crashes", {}).items():
                 crashes[k] = v
             _rebuild_num_index()
             log.info("Loaded %d bookmakers from BOOKMAKERS_JSON env var", len(bookmakers))
-            return
         except Exception as e:
             log.error("Failed to load from BOOKMAKERS_JSON env var: %s", e)
 
-    # 1b. Cargar crashes desde crashes.json si existe
-    if os.path.exists(CRASHES_PATH):
-        try:
-            with open(CRASHES_PATH) as f:
-                saved = json.load(f)
-            for k, v in saved.items():
-                crashes[k] = v
-            log.info("Loaded crashes from %s (%d bookmakers)", CRASHES_PATH, len(saved))
-        except Exception as e:
-            log.error("crashes load fail: %s", e)
-
-    # 2. Fallback: archivo local config.json (desarrollo local / primer deploy)
-    if os.path.exists(CONFIG_PATH):
+    # 2. Fallback: archivo local config.json
+    if not bookmakers and os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH) as f:
                 d = json.load(f)
@@ -98,15 +95,30 @@ def _load_config():
             log.info("Loaded %d bookmakers from config.json", len(bookmakers))
         except Exception as e:
             log.error("Load fail: %s", e)
-    else:
+
+    # 3. Cargar crashes desde crashes.json (disco persistente — tiene prioridad)
+    if os.path.exists(CRASHES_PATH):
+        try:
+            with open(CRASHES_PATH) as f:
+                saved = json.load(f)
+            for k, v in saved.items():
+                # Merge: si ya hay crashes de config.json, los de crashes.json
+                # tienen prioridad porque se guardan más frecuentemente
+                crashes[k] = v
+            total_restored = sum(len(v) for v in crashes.values())
+            log.info("Restored crashes from %s → %d crashes across %d bookmakers",
+                     CRASHES_PATH, total_restored, len(saved))
+        except Exception as e:
+            log.error("crashes.json load fail: %s", e)
+
+    if not bookmakers:
         log.info("No config found — starting empty. Agrega bookmakers desde la UI.")
+    else:
+        total_c = sum(len(v) for v in crashes.values())
+        log.info("★ READY: %d bookmakers, %d crashes restored — captura continúa en tiempo real ★",
+                 len(bookmakers), total_c)
 
 def _save_config():
-    """
-    Guarda en disco local.
-    NOTA: En Render el disco es efímero — los datos se pierden al redesplegar.
-    Usa GET /api/export-config y copia el JSON como BOOKMAKERS_JSON en Render.
-    """
     try:
         with open(CONFIG_PATH, "w") as f:
             json.dump({"bookmakers": bookmakers, "crashes": dict(crashes)},
@@ -115,20 +127,16 @@ def _save_config():
         log.error("Save fail: %s", e)
 
 def _save_crashes():
-    """Guarda crashes en disco persistente."""
+    """Guarda crashes en disco persistente — se ejecuta tras cada crash nuevo."""
     try:
-        slim = {k: v[-30:] for k, v in crashes.items()}
+        # Guardar últimos 500 por bookmaker para tener historial al reiniciar
+        slim = {k: v[-500:] for k, v in crashes.items() if v}
         with open(CRASHES_PATH, "w") as f:
             json.dump(slim, f, default=str)
     except Exception as e:
         log.error("crashes save fail: %s", e)
 
 def _rebuild_num_index():
-    """
-    Reconstruye _num_to_bid y _bm_counter a partir de los bookmakers cargados.
-    Cada bookmaker tiene un campo 'num_id' (entero) asignado al crearlo.
-    Si no lo tiene (bookmakers viejos), se asigna uno nuevo.
-    """
     global _bm_counter, _num_to_bid
     _num_to_bid = {}
     max_num = 0
@@ -138,7 +146,6 @@ def _rebuild_num_index():
             _num_to_bid[nid] = bid
             if nid > max_num:
                 max_num = nid
-    # Asignar num_id a bookmakers que no lo tengan (compatibilidad hacia atrás)
     for bid, bm in bookmakers.items():
         if not isinstance(bm.get("num_id"), int):
             max_num += 1
@@ -201,7 +208,6 @@ class SFS2XDecoder:
 def _try_sfs_decode(raw):
     payloads = [("raw", raw)]
 
-    # --- Header 0x80: SFS2X standard frame ---
     if raw and raw[0] == 0x80:
         off = 1
         if len(raw) > off + 1:
@@ -211,34 +217,26 @@ def _try_sfs_decode(raw):
             try: payloads.append(("sfs_hdr_zlib", zlib.decompress(raw[off:])))
             except: pass
 
-    # --- Header 0xa0: Spribe compressed frame (crash/state data) ---
-    # Format: a0 XX YY [zlib data starting with 78 9c ...]
-    # Seen in logs as: a00330789c..., a00411789c..., a0044a789c...
     if raw and raw[0] == 0xa0 and len(raw) > 3:
-        # Try skipping 3-byte header (a0 + 2 size bytes) → zlib payload
         candidate = raw[3:]
         try:
             payloads.append(("a0_hdr_zlib", zlib.decompress(candidate)))
         except: pass
-        # Also try 4-byte header in case size is 3 bytes
         if len(raw) > 4:
             candidate4 = raw[4:]
             try:
                 payloads.append(("a0_hdr4_zlib", zlib.decompress(candidate4)))
             except: pass
 
-    # --- Generic zlib attempt ---
     try: payloads.append(("zlib", zlib.decompress(raw)))
     except: pass
 
-    # --- Find zlib magic bytes (78 9c or 78 da) anywhere in frame ---
     for i in range(1, min(16, len(raw) - 2)):
         if raw[i] == 0x78 and raw[i+1] in (0x9c, 0xda, 0x01, 0x5e):
             try:
                 payloads.append((f"zlib_at{i}", zlib.decompress(raw[i:])))
             except: pass
 
-    # --- Byte skips (small headers) ---
     for skip in range(1, min(9, len(raw))):
         payloads.append((f"skip{skip}", raw[skip:]))
 
@@ -253,28 +251,30 @@ def _try_sfs_decode(raw):
     return None, None
 
 # ---------------------------------------------------------------------------
-# SFS2X Frame Classification
+# SFS2X Frame Classification — v7 STRICT
 # ---------------------------------------------------------------------------
 
-PROTOCOL_KEYS = {
-    "ct", "ms", "tk", "aph",
-    "zn", "un", "pw",
-    "rn", "ri", "rc", "uc", "id",
-    "xt", "pi",
-    # cashout list keys — multiplier inside these is a player cashout, NOT a crash
-    "cashouts", "openBetsCount", "winAmount", "betId", "player_id",
-}
-
-GAME_KEYS = {
+# Keys que SOLO aparecen en frames de crash/resultado final
+CRASH_KEYS = {
     "odd", "odds", "crash", "result",
     "coefficient", "crashValue", "endK", "bust",
     "coef", "coeff",
     "crashMultiplier", "finalMultiplier", "roundResult",
-    "maxMultiplier", # Spribe: roundChartInfo confirma crash value + roundId
-    "crashX",        # Spribe: ext:x con crashX = crash INSTANTÁNEO (captura inmediata)
+    "maxMultiplier",   # Spribe: roundChartInfo
+    "crashX",          # Spribe: crash instantáneo
 }
 
-GAME_COMMANDS = {
+# Keys que indican que el frame es un CASHOUT de jugador (NO un crash)
+CASHOUT_KEYS = {
+    "cashouts", "openBetsCount", "winAmount", "betId", "player_id",
+    "cashOutAt", "cashedOut", "cashedOutAt", "cashout",
+    "bets", "betAmount", "payout", "payoutMultiplier",
+    "userName", "username", "nickname", "avatar",
+    "currentBets", "activeBets",
+}
+
+# Comandos que indican CRASH / FIN DE RONDA
+CRASH_COMMANDS = {
     "N", "F", "R",
     "end", "finish",
     "currentbetsresult",
@@ -283,25 +283,39 @@ GAME_COMMANDS = {
     "crash",
     "roundEnd", "roundend",
     "gameend", "gameEnd",
-    "roundChartInfo",      # Spribe crash result (maxMultiplier = crash value)
+    "roundChartInfo",
 }
 
+# Comandos de TICK en vuelo — SIEMPRE ignorar (excepto si tiene crashX)
 TICK_COMMANDS = {
-    "x", "X",          # ticks en vuelo — ignorar siempre
+    "x", "X",
     "tick", "update",
     "updateCurrentCashOuts", "currentCashOuts", "cashouts",
     "B", "T", "S",
 }
 
+# Comandos de estado/info — ignorar para extracción
 STATE_COMMANDS = {
     "currentBetsInfoHandler",
     "gameStateHandler",
     "statsHandler",
-    "S", "T", "B", "C",
+}
+
+# Keys de protocolo SFS2X — nunca son game data
+PROTOCOL_KEYS = {
+    "ct", "ms", "tk", "aph",
+    "zn", "un", "pw",
+    "rn", "ri", "rc", "uc", "id",
+    "xt", "pi",
 }
 
 
 def classify_frame(obj):
+    """
+    Clasifica un frame SFS2X decodificado.
+    Retorna (tipo, is_crash_event).
+    is_crash_event=True SOLO si el frame representa un CRASH REAL (fin de ronda).
+    """
     if not isinstance(obj, dict):
         return ("unknown", False)
 
@@ -309,6 +323,7 @@ def classify_frame(obj):
     a = obj.get("a")
     p = obj.get("p", {})
 
+    # Handshake / Login / Room — protocolo, no game
     if c == 0 and a == 0:
         return ("handshake_req", False)
     if c == 0 and isinstance(p, dict) and ("ct" in p or "ms" in p or "tk" in p):
@@ -319,124 +334,153 @@ def classify_frame(obj):
         return ("login_resp", False)
     if c == 4:
         return ("room_join", False)
+    if c == 7:
+        return ("ping", False)
 
+    # Extension frames (a == 13)
     if a == 13:
         if isinstance(p, dict):
             cmd = p.get("c", "")
             if isinstance(cmd, str):
-                cmd_lower = cmd.lower().strip()
-                for gc in GAME_COMMANDS:
+                cmd_stripped = cmd.strip()
+                cmd_lower = cmd_stripped.lower()
+
+                # ¿Es un comando de CRASH / FIN DE RONDA?
+                for gc in CRASH_COMMANDS:
                     if gc.lower() == cmd_lower:
-                        return (f"ext_game:{cmd}", True)
+                        return (f"ext_crash:{cmd_stripped}", True)
+
+                # ¿Es tick en vuelo?
+                for tc in TICK_COMMANDS:
+                    if tc.lower() == cmd_lower:
+                        # EXCEPCIÓN: ext:x con crashX = crash real
+                        inner_p = p.get("p", {})
+                        if isinstance(inner_p, dict) and "crashX" in inner_p:
+                            return (f"ext_crashX:{cmd_stripped}", True)
+                        return (f"ext_tick:{cmd_stripped}", False)
+
+                # ¿Es estado?
                 for sc in STATE_COMMANDS:
                     if sc.lower() == cmd_lower:
-                        return (f"ext_state:{cmd}", True)
-                return (f"ext:{cmd}", True)
-        return ("extension", True)
+                        return (f"ext_state:{cmd_stripped}", False)
 
-    if isinstance(p, dict) and any(k in p for k in GAME_KEYS):
-        return (f"sfs_c{c}_a{a}_gamedata", True)
+                # Comando desconocido — verificar si inner_p tiene crash keys
+                inner_p = p.get("p", {})
+                if isinstance(inner_p, dict):
+                    has_crash = any(k in inner_p for k in CRASH_KEYS)
+                    has_cashout = any(k in inner_p for k in CASHOUT_KEYS)
+                    if has_crash and not has_cashout:
+                        return (f"ext_crash_detected:{cmd_stripped}", True)
 
-    if c == 7:
-        return ("ping", False)
+                return (f"ext:{cmd_stripped}", False)
+        return ("extension", False)
+
+    # Frame SFS con keys de crash directas en p (sin wrapper de extensión)
+    if isinstance(p, dict):
+        has_crash_key = any(k in p for k in CRASH_KEYS)
+        has_cashout_key = any(k in p for k in CASHOUT_KEYS)
+        if has_crash_key and not has_cashout_key:
+            return (f"sfs_c{c}_a{a}_crash", True)
+        if has_cashout_key:
+            return (f"sfs_c{c}_a{a}_cashout", False)
 
     return (f"sfs_c{c}_a{a}", False)
 
 
 # ---------------------------------------------------------------------------
-# Multiplier extraction
+# Multiplier extraction — v7 STRICT (solo de crash frames)
 # ---------------------------------------------------------------------------
 
-def extract_game_mults(obj, label=""):
+def extract_crash_mult(obj, label=""):
     """
-    Retorna (list_of_multipliers, round_id_or_None).
-    round_id viene de roundChartInfo.roundId — clave de dedup definitiva.
+    Extrae multiplicador de crash SOLO de frames clasificados como crash.
+    Retorna (multiplier_or_None, round_id_or_None).
     """
     if not isinstance(obj, dict):
-        return [], None
+        return None, None
 
     p = obj.get("p")
     if not isinstance(p, dict):
-        return [], None
+        return None, None
 
     inner_p = p.get("p")
     cmd = p.get("c", "")
 
-    # Filtrar ticks en vuelo (x subiendo: 1.01x, 1.02x...)
-    # EXCEPCIÓN: ext:x con "crashX" = el avión acaba de caer → capturar INMEDIATAMENTE
-    if isinstance(cmd, str) and cmd.lower() in {c.lower() for c in TICK_COMMANDS}:
-        has_crash_x = isinstance(inner_p, dict) and "crashX" in inner_p
-        if not has_crash_x:
-            return [], None
-        # tiene crashX → es el crash real, continuar
-
-    # Extraer roundId si está disponible (viene en roundChartInfo o en ext:x con crashX)
     round_id = None
     if isinstance(inner_p, dict):
         round_id = inner_p.get("roundId")
 
-    results = []
+    # --- Buscar crash value en inner_p (extensión Spribe) ---
+    mult = _extract_from_obj(inner_p, label, cmd)
+    if mult is not None:
+        return mult, round_id
 
-    if isinstance(inner_p, dict):
-        results.extend(_scan_game_obj(inner_p, label, cmd))
+    # --- Buscar en p directamente ---
+    mult = _extract_from_obj(p, label, cmd)
+    if mult is not None:
+        return mult, round_id
 
+    # --- Buscar en sub-keys conocidas de resultado ---
     for subkey in ("r", "data", "result", "res", "round", "game", "info"):
         sub = p.get(subkey) if isinstance(p, dict) else None
         if isinstance(sub, dict):
-            results.extend(_scan_game_obj(sub, label, cmd))
-        elif isinstance(sub, list):
-            for item in sub:
-                if isinstance(item, dict):
-                    results.extend(_scan_game_obj(item, label, cmd))
+            mult = _extract_from_obj(sub, label, cmd)
+            if mult is not None:
+                return mult, round_id
 
-    if not results:
-        results.extend(_scan_game_obj(p, label, cmd))
-
-    if not results:
-        results.extend(_scan_game_obj(obj, label, cmd))
-
-    return results, round_id
+    return None, round_id
 
 
-def _scan_game_obj(obj, label="", cmd="", depth=0):
-    if depth > 8 or not isinstance(obj, dict):
-        return []
+def _extract_from_obj(obj, label="", cmd=""):
+    """
+    Extrae UN multiplicador de crash de un dict.
+    Solo mira CRASH_KEYS, ignora cualquier cosa que huela a cashout.
+    """
+    if not isinstance(obj, dict):
+        return None
 
-    results = []
-    for key, val in obj.items():
-        if key in PROTOCOL_KEYS:
+    # Si el objeto tiene keys de cashout, rechazar completamente
+    if any(k in obj for k in CASHOUT_KEYS):
+        log.debug("[%s] Skipping obj with cashout keys: %s", label, list(obj.keys())[:10])
+        return None
+
+    # Si tiene una lista de "cashouts" o "bets", es data de jugadores
+    for reject_key in ("cashouts", "bets", "currentBets", "activeBets"):
+        val = obj.get(reject_key)
+        if isinstance(val, list) and len(val) > 0:
+            log.debug("[%s] Skipping obj with %s list (%d items)", label, reject_key, len(val))
+            return None
+
+    # Prioridad: crashX > maxMultiplier > odd/crash/result/etc.
+    priority_keys = ["crashX", "maxMultiplier", "crash", "crashValue", "bust",
+                     "odd", "odds", "result", "coefficient", "endK",
+                     "coef", "coeff", "crashMultiplier", "finalMultiplier", "roundResult"]
+
+    # Keys que vienen como entero x100 (odd=234 → 2.34x)
+    X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
+                     "crashValue", "endK", "crashMultiplier",
+                     "finalMultiplier", "coefficient"}
+
+    for key in priority_keys:
+        if key not in obj:
             continue
+        val = obj[key]
 
-        if key in GAME_KEYS:
-            X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
-                             "crashValue", "endK", "crashMultiplier",
-                             "finalMultiplier", "coefficient"}
-            # crashX and maxMultiplier are already floats (e.g. 1.0 = 1.00x) — never divide
-            if key in X100_INT_KEYS and isinstance(val, int):
-                if val < 100:
-                    continue
-                parsed_val = round(val / 100.0, 2)
-                log.debug("[%s] x100 convert: key='%s' raw=%d -> %.2f", label, key, val, parsed_val)
-            else:
-                parsed_val = val
-            m = _parse_mult(parsed_val)
-            if m is not None:
-                results.append(m)
-                log.info("[%s] FOUND mult=%.2fx key='%s' raw_val=%s cmd='%s'", label, m, key, val, cmd)
+        if key in X100_INT_KEYS and isinstance(val, int):
+            if val < 100:
+                continue
+            parsed_val = round(val / 100.0, 2)
+            log.debug("[%s] x100 convert: key='%s' raw=%d -> %.2f", label, key, val, parsed_val)
+        else:
+            parsed_val = val
 
-        elif isinstance(val, dict):
-            results.extend(_scan_game_obj(val, label, cmd, depth+1))
-        elif isinstance(val, list):
-            for item in val:
-                if isinstance(item, dict):
-                    results.extend(_scan_game_obj(item, label, cmd, depth+1))
-                elif isinstance(item, (int, float)):
-                    if key in GAME_KEYS:
-                        m = _parse_mult(item)
-                        if m is not None:
-                            results.append(m)
+        m = _parse_mult(parsed_val)
+        if m is not None:
+            log.info("[%s] CRASH mult=%.2fx key='%s' raw_val=%s cmd='%s'",
+                     label, m, key, val, cmd)
+            return m
 
-    return results
+    return None
 
 
 def _parse_mult(val):
@@ -454,117 +498,115 @@ def _parse_mult(val):
 
 
 # ---------------------------------------------------------------------------
-# Process frames
+# Process frames — v7 simplified
 # ---------------------------------------------------------------------------
-def process_binary(raw, bm_id, bm_name, decoder_type):
+def process_frame(raw_or_text, bm_id, bm_name, is_binary=True, decoder_type="auto"):
+    """
+    Procesa un frame (binario o texto).
+    SOLO extrae multiplicadores de frames clasificados como CRASH.
+    """
     label = bm_name or bm_id
     dbg = {
         "time": datetime.now(timezone.utc).isoformat(),
-        "size": len(raw), "type": "BIN",
-        "hex": raw[:100].hex(),
-        "ascii": raw[:100].decode("ascii", errors="replace"),
+        "size": len(raw_or_text),
+        "type": "BIN" if is_binary else "TEXT",
         "decoded": None, "method": None, "frame_type": None, "mults": [],
     }
 
-    mults = []
+    if is_binary:
+        dbg["hex"] = raw_or_text[:100].hex()
+        dbg["ascii"] = raw_or_text[:100].decode("ascii", errors="replace")
+    else:
+        dbg["text_preview"] = raw_or_text[:600] if isinstance(raw_or_text, str) else ""
 
-    if decoder_type in ("auto", "sfs"):
-        parsed, method = _try_sfs_decode(raw)
-        if parsed:
-            dbg["decoded"] = _sj(parsed)[:1500]
-            dbg["method"] = f"sfs2x/{method}"
-            ftype, is_game = classify_frame(parsed) if isinstance(parsed, dict) else ("other", False)
-            dbg["frame_type"] = ftype
-            log.info("[%s] SFS2X(%s) → %s (game=%s): %s",
-                     label, method, ftype, is_game, _sj(parsed)[:600])
-            if is_game:
-                mults, _ = extract_game_mults(parsed, label)
-            else:
-                log.debug("[%s] Skipping non-game frame: %s", label, ftype)
+    mult = None
+    round_id = None
 
-    if not mults and decoder_type in ("auto", "msgpack"):
-        for payload in _variants(raw):
-            try:
-                import msgpack
-                obj = msgpack.unpackb(payload, raw=False)
-                if obj and isinstance(obj, dict):
-                    dbg["decoded"] = _sj(obj)[:1500]
-                    dbg["method"] = "msgpack"
-                    ftype, is_game = classify_frame(obj)
+    # --- Binary frame processing ---
+    if is_binary:
+        if decoder_type in ("auto", "sfs"):
+            parsed, method = _try_sfs_decode(raw_or_text)
+            if parsed:
+                dbg["decoded"] = _sj(parsed)[:1500]
+                dbg["method"] = f"sfs2x/{method}"
+                if isinstance(parsed, dict):
+                    ftype, is_crash = classify_frame(parsed)
                     dbg["frame_type"] = ftype
-                    if is_game:
-                        mults, _ = extract_game_mults(obj, label)
-                    if mults: break
-            except: continue
+                    log.info("[%s] SFS2X(%s) → %s (crash=%s): %s",
+                             label, method, ftype, is_crash, _sj(parsed)[:600])
+                    if is_crash:
+                        mult, round_id = extract_crash_mult(parsed, label)
+                else:
+                    dbg["frame_type"] = "non-dict"
 
-    if not mults:
-        for payload in _variants(raw):
-            try:
-                txt = payload.decode("utf-8", errors="strict")
-                for m in re.finditer(r'[{\[].*?[}\]]', txt, re.DOTALL):
-                    try:
-                        obj = json.loads(m.group())
-                        if isinstance(obj, dict):
-                            ftype, is_game = classify_frame(obj)
-                            if is_game:
-                                ms, _ = extract_game_mults(obj, label)
-                                if ms:
-                                    dbg["method"] = "json_embed"
-                                    dbg["frame_type"] = ftype
-                                    mults.extend(ms)
-                    except: continue
-            except: continue
+        if mult is None and decoder_type in ("auto", "msgpack"):
+            for payload in _variants(raw_or_text):
+                try:
+                    import msgpack
+                    obj = msgpack.unpackb(payload, raw=False)
+                    if obj and isinstance(obj, dict):
+                        dbg["decoded"] = _sj(obj)[:1500]
+                        dbg["method"] = "msgpack"
+                        ftype, is_crash = classify_frame(obj)
+                        dbg["frame_type"] = ftype
+                        if is_crash:
+                            mult, round_id = extract_crash_mult(obj, label)
+                        if mult is not None:
+                            break
+                except: continue
 
-    seen = set(); unique = []
-    for m in mults:
-        if m not in seen: seen.add(m); unique.append(m)
+        # JSON embedded in binary
+        if mult is None:
+            for payload in _variants(raw_or_text):
+                try:
+                    txt = payload.decode("utf-8", errors="strict")
+                    for m_match in re.finditer(r'[{\[].*?[}\]]', txt, re.DOTALL):
+                        try:
+                            obj = json.loads(m_match.group())
+                            if isinstance(obj, dict):
+                                ftype, is_crash = classify_frame(obj)
+                                if is_crash:
+                                    mult, round_id = extract_crash_mult(obj, label)
+                                    if mult is not None:
+                                        dbg["method"] = "json_embed"
+                                        dbg["frame_type"] = ftype
+                                        break
+                        except: continue
+                except: continue
 
-    dbg["mults"] = unique
+    # --- Text frame processing ---
+    else:
+        text = raw_or_text
+        try:
+            obj = json.loads(text)
+            dbg["decoded"] = _sj(obj)[:1500]
+            dbg["method"] = "json"
+            if isinstance(obj, dict):
+                ftype, is_crash = classify_frame(obj)
+                dbg["frame_type"] = ftype
+                log.info("[%s] JSON: %s (crash=%s): %s", label, ftype, is_crash, _sj(obj)[:600])
+                if is_crash:
+                    mult, round_id = extract_crash_mult(obj, label)
+        except: pass
+
+        if mult is None:
+            for line in text.split('\n'):
+                line = line.strip()
+                if not line: continue
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        ftype, is_crash = classify_frame(obj)
+                        if is_crash:
+                            mult, round_id = extract_crash_mult(obj, label)
+                            if mult is not None:
+                                break
+                except: continue
+
+    if mult is not None:
+        dbg["mults"] = [mult]
     _store_dbg(bm_id, dbg)
-    return unique
-
-
-def process_text(text, bm_id, bm_name):
-    label = bm_name or bm_id
-    dbg = {
-        "time": datetime.now(timezone.utc).isoformat(),
-        "size": len(text), "type": "TEXT",
-        "text_preview": text[:600],
-        "decoded": None, "method": None, "frame_type": None, "mults": [],
-    }
-
-    mults = []
-    try:
-        obj = json.loads(text)
-        dbg["decoded"] = _sj(obj)[:1500]
-        dbg["method"] = "json"
-        if isinstance(obj, dict):
-            ftype, is_game = classify_frame(obj)
-            dbg["frame_type"] = ftype
-            if is_game:
-                mults, _ = extract_game_mults(obj, label)
-        log.info("[%s] JSON: %s", label, _sj(obj)[:600])
-    except: pass
-
-    if not mults:
-        for line in text.split('\n'):
-            line = line.strip()
-            if not line: continue
-            try:
-                obj = json.loads(line)
-                if isinstance(obj, dict):
-                    ftype, is_game = classify_frame(obj)
-                    if is_game:
-                        ms, _ = extract_game_mults(obj, label)
-                        if ms: mults.extend(ms)
-            except: continue
-
-    seen = set(); unique = []
-    for m in mults:
-        if m not in seen: seen.add(m); unique.append(m)
-    dbg["mults"] = unique
-    _store_dbg(bm_id, dbg)
-    return unique
+    return mult, round_id
 
 
 def _store_dbg(bm_id, dbg):
@@ -582,17 +624,14 @@ def _sj(obj):
     except: return str(obj)
 
 # ---------------------------------------------------------------------------
-# WebSocket Client
+# WebSocket Client — v7: captura desde frame 0
 # ---------------------------------------------------------------------------
 def _b64_to_bytes(s):
     if not s or not s.strip(): return b""
     try: return base64.b64decode(s)
     except: return b""
 
-# Generación activa por bookmaker — evita doble-registro cuando hay reconexión
 ws_generation: dict = {}
-# Último multiplicador registrado por bookmaker — dedup intra-ronda
-_last_recorded: dict = {}   # bm_id → {"mult": float, "time": datetime, "round_id": str|None}
 
 def _start_ws(bm_id):
     bm = bookmakers.get(bm_id)
@@ -601,13 +640,9 @@ def _start_ws(bm_id):
     if not ws_url:
         connection_status[bm_id] = "error"; return
 
-    # PRIMERO incrementar generación — así el hilo viejo queda obsoleto
-    # antes de que reciba el close y trate de pisar el estado
     gen = ws_generation.get(bm_id, 0) + 1
     ws_generation[bm_id] = gen
 
-    # Ahora sí cerrar la conexión anterior — si dispara on_close,
-    # ese hilo verá gen desactualizado y no tocará nada
     old_ws = ws_connections.pop(bm_id, None)
     if old_ws:
         try: old_ws.close()
@@ -625,7 +660,9 @@ def _start_ws(bm_id):
     log.info("[%s] msg1=%d bytes, msg2=%d bytes, msg3=%d bytes", name, len(msg1), len(msg2), len(msg3))
     log.info("=" * 60)
 
-    auth_state = {"step": "wait_connect", "handshake_done": False, "login_done": False}
+    # Auth state: solo para saber cuándo enviar los mensajes de handshake
+    # PERO todos los frames se procesan para game data desde el frame 0
+    auth_sent = {"msg1": False, "msg2": False, "msg3": False}
     stats = {"sent": 0, "recv_bin": 0, "recv_txt": 0}
 
     def send_msg(ws, msg, idx, label_type):
@@ -638,155 +675,112 @@ def _start_ws(bm_id):
             log.error("[%s] ✗ SEND FAIL msg%d: %s", name, idx, e)
 
     def on_open(ws):
-        log.info("[%s] ✓ CONNECTED", name)
+        log.info("[%s] ✓ CONNECTED — capturing from frame 0", name)
         connection_status[bm_id] = "connected"
-        auth_state["step"] = "send_handshake"
-        send_msg(ws, msg1, 1, "Handshake")
-        auth_state["step"] = "wait_handshake_resp"
+        if msg1 and not auth_sent["msg1"]:
+            auth_sent["msg1"] = True
+            send_msg(ws, msg1, 1, "Handshake")
+
+    def _try_advance_auth(ws, parsed):
+        """
+        Intenta avanzar la secuencia de autenticación basándose en el frame recibido.
+        Se ejecuta EN PARALELO con el procesamiento de game data.
+        """
+        if not isinstance(parsed, dict):
+            return
+
+        ftype, _ = classify_frame(parsed)
+
+        if "handshake_resp" in ftype and not auth_sent["msg2"]:
+            auth_sent["msg2"] = True
+            log.info("[%s] ✓ Handshake response → sending Login (msg2)", name)
+            time.sleep(0.2)
+            send_msg(ws, msg2, 2, "Login")
+            return
+
+        if ("login_resp" in ftype or "room_join" in ftype) and not auth_sent["msg3"]:
+            auth_sent["msg3"] = True
+            log.info("[%s] ✓ Login response → sending Extension (msg3)", name)
+            time.sleep(0.2)
+            send_msg(ws, msg3, 3, "Extension")
+            return
+
+        if "ext" in ftype and not auth_sent["msg2"]:
+            auth_sent["msg2"] = True
+            log.info("[%s] ✓ Got extension early → sending Login anyway", name)
+            time.sleep(0.2)
+            send_msg(ws, msg2, 2, "Login")
+        elif "ext" in ftype and not auth_sent["msg3"]:
+            auth_sent["msg3"] = True
+            log.info("[%s] ✓ Got extension before msg3 → sending Extension", name)
+            time.sleep(0.2)
+            send_msg(ws, msg3, 3, "Extension")
 
     def on_message(ws, message):
+        if ws_generation.get(bm_id) != gen:
+            return
+
         if isinstance(message, str):
             stats["recv_txt"] += 1
             log.info("[%s] ← TXT #%d (%d chars): %s",
                      name, stats["recv_txt"], len(message), message[:500])
-            mults = process_text(message, bm_id, name)
-            for m in mults:
-                _record_crash(bm_id, name, m)  # text frames sin roundId
+
+            # PROCESAR para game data (frame 0+)
+            mult, rid = process_frame(message, bm_id, name,
+                                      is_binary=False, decoder_type=decoder_type)
+            if mult is not None:
+                _record_crash(bm_id, name, mult, rid)
+
+            # También intentar avanzar auth con JSON
+            try:
+                obj = json.loads(message)
+                if isinstance(obj, dict):
+                    _try_advance_auth(ws, obj)
+            except: pass
             return
 
         stats["recv_bin"] += 1
         log.info("[%s] ← BIN #%d (%d bytes): %s",
                  name, stats["recv_bin"], len(message), message[:80].hex())
 
+        # Decodificar para auth Y para game data
         parsed, method = _try_sfs_decode(message)
-        ftype = "unknown"
-        is_game = False
 
+        # 1. Avanzar auth si es necesario
         if parsed and isinstance(parsed, dict):
-            ftype, is_game = classify_frame(parsed)
-            log.info("[%s] Frame: %s (game=%s) decoded=%s",
-                     name, ftype, is_game, _sj(parsed)[:600])
+            _try_advance_auth(ws, parsed)
 
-        dbg = {
-            "time": datetime.now(timezone.utc).isoformat(),
-            "size": len(message), "type": "BIN",
-            "hex": message[:100].hex(),
-            "ascii": message[:100].decode("ascii", errors="replace"),
-            "decoded": _sj(parsed)[:1500] if parsed else None,
-            "method": f"sfs2x/{method}" if method else None,
-            "frame_type": ftype,
-            "mults": [],
-        }
-
-        step = auth_state["step"]
-
-        if step == "wait_handshake_resp" and ftype == "handshake_resp":
-            log.info("[%s] ✓ Handshake response received. Sending Login (msg2)...", name)
-            auth_state["handshake_done"] = True
-            auth_state["step"] = "wait_login_resp"
-            time.sleep(0.3)
-            send_msg(ws, msg2, 2, "Login")
-
-        elif step == "wait_login_resp" and ftype in ("login_resp", "room_join"):
-            log.info("[%s] ✓ Login/Room response received. Sending Extension (msg3)...", name)
-            auth_state["login_done"] = True
-            auth_state["step"] = "authenticated"
-            time.sleep(0.3)
-            send_msg(ws, msg3, 3, "Extension:currentBets")
-            if is_game and parsed:
-                mults, rid = extract_game_mults(parsed, name)
-                dbg["mults"] = mults
-                for m in mults:
-                    _record_crash(bm_id, name, m, rid)
-
-        elif step == "wait_login_resp" and "ext" in ftype:
-            log.info("[%s] ✓ Got extension before explicit login resp, auth seems ok", name)
-            auth_state["login_done"] = True
-            auth_state["step"] = "authenticated"
-            if not auth_state.get("msg3_sent"):
-                auth_state["msg3_sent"] = True
-                time.sleep(0.3)
-                send_msg(ws, msg3, 3, "Extension:currentBets")
-            if is_game:
-                mults, rid = extract_game_mults(parsed, name)
-                dbg["mults"] = mults
-                for m in mults:
-                    _record_crash(bm_id, name, m, rid)
-
-        elif auth_state["step"] == "authenticated" and is_game:
-            # Verificar que este hilo sigue siendo el activo antes de registrar
-            if ws_generation.get(bm_id) != gen:
-                log.debug("[%s] Stale thread (gen %d != %d), discarding frame", name, gen, ws_generation.get(bm_id))
-                return
-            mults, rid = extract_game_mults(parsed, name)
-            dbg["mults"] = mults
-            for m in mults:
-                _record_crash(bm_id, name, m, rid)
-
-        elif auth_state["step"] == "authenticated":
-            # Frame no clasificado como game. Solo loguear — NO intentar extracción
-            # para evitar registrar duplicados desde frames de tick/cashout/estado
-            # que contienen multipliers de jugadores activos (no crashes reales).
-            if parsed:
-                log.info("[%s] UNKNOWN post-auth frame (skipped extraction): ftype=%s decoded=%s",
-                         name, ftype, _sj(parsed)[:800])
-            else:
-                log.info("[%s] Undecoded post-auth frame: hex=%s",
-                         name, message[:30].hex() if isinstance(message, bytes) else "txt")
-
-        else:
-            if not auth_state["handshake_done"] and ftype != "handshake_resp":
-                log.info("[%s] Non-handshake frame during handshake phase: %s", name, ftype)
-                if msg2:
-                    log.info("[%s] Attempting Login anyway...", name)
-                    auth_state["handshake_done"] = True
-                    auth_state["step"] = "wait_login_resp"
-                    time.sleep(0.3)
-                    send_msg(ws, msg2, 2, "Login")
-
-        _store_dbg(bm_id, dbg)
+        # 2. SIEMPRE procesar para game data — desde frame 0
+        mult, rid = process_frame(message, bm_id, name,
+                                  is_binary=True, decoder_type=decoder_type)
+        if mult is not None:
+            _record_crash(bm_id, name, mult, rid)
 
     def on_error(ws, error):
         err_str = str(error)
         log.error("[%s] ✗ ERROR: %s", name, err_str)
-        # Diagnóstico detallado según tipo de error
         if "Connection refused" in err_str:
-            log.error("[%s] ▶ DIAGNÓSTICO: Servidor rechazó la conexión. Verifica la URL wss://", name)
+            log.error("[%s] ▶ Servidor rechazó la conexión. Verifica la URL wss://", name)
         elif "timed out" in err_str.lower() or "timeout" in err_str.lower():
-            log.error("[%s] ▶ DIAGNÓSTICO: Timeout — servidor no responde. Posible IP bloqueada en Render.", name)
+            log.error("[%s] ▶ Timeout — servidor no responde.", name)
         elif "SSL" in err_str or "certificate" in err_str.lower():
-            log.error("[%s] ▶ DIAGNÓSTICO: Error SSL. Intentando reconectar con ssl_opt desactivado.", name)
+            log.error("[%s] ▶ Error SSL.", name)
         elif "403" in err_str or "Forbidden" in err_str:
-            log.error("[%s] ▶ DIAGNÓSTICO: HTTP 403 — servidor rechaza los headers. Verifica Origin/Host.", name)
-        elif "101" not in err_str and "handshake" in err_str.lower():
-            log.error("[%s] ▶ DIAGNÓSTICO: Handshake WS fallido. El servidor puede requerir subprotocolo específico.", name)
-        # NO pisar connection_status aquí — on_close lo maneja correctamente.
-        # on_error siempre va seguido de on_close, así que el estado se actualiza ahí.
+            log.error("[%s] ▶ HTTP 403 — servidor rechaza los headers.", name)
 
     def on_close(ws, code, msg):
-        log.info("[%s] CLOSED code=%s msg=%s | handshake=%s login=%s step=%s | sent=%d bin=%d txt=%d",
-                 name, code, msg,
-                 auth_state["handshake_done"], auth_state["login_done"], auth_state["step"],
-                 stats["sent"], stats["recv_bin"], stats["recv_txt"])
-        # Diagnóstico según código de cierre
+        log.info("[%s] CLOSED code=%s msg=%s | sent=%d bin=%d txt=%d",
+                 name, code, msg, stats["sent"], stats["recv_bin"], stats["recv_txt"])
         if code == 1006:
-            log.error("[%s] ▶ DIAGNÓSTICO código 1006: Cierre anormal — sin respuesta del servidor. "
-                      "Posibles causas: URL incorrecta, IP bloqueada, servidor caído, headers faltantes.", name)
-        elif code == 1008:
-            log.error("[%s] ▶ DIAGNÓSTICO código 1008: Policy Violation — el servidor rechazó por policy. "
-                      "Verifica que los mensajes Base64 sean correctos.", name)
-        elif code == 1003:
-            log.error("[%s] ▶ DIAGNÓSTICO código 1003: Tipo de dato no aceptado por el servidor.", name)
+            log.error("[%s] ▶ Código 1006: Cierre anormal.", name)
         elif code is None and stats["recv_bin"] == 0 and stats["recv_txt"] == 0:
-            log.error("[%s] ▶ DIAGNÓSTICO: Cerró sin recibir NINGÚN frame. "
-                      "El servidor no completó el handshake WebSocket. "
-                      "Revisa: 1) URL wss:// correcta  2) Headers Origin/Host  3) msg1 Base64 válido.", name)
-        # Ignorar si este hilo ya está obsoleto
+            log.error("[%s] ▶ Cerró sin recibir NINGÚN frame.", name)
+
         if ws_generation.get(bm_id) != gen:
             log.debug("[%s] on_close: hilo obsoleto gen=%d, ignorando", name, gen)
             return
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
-            connection_status[bm_id] = "connecting"
+            connection_status[bm_id] = "reconnecting"
             log.info("[%s] Reconnect en 5s...", name)
             def _reconnect():
                 time.sleep(5)
@@ -796,11 +790,11 @@ def _start_ws(bm_id):
         else:
             connection_status[bm_id] = "disconnected"
 
-    # Headers de navegador real — evita que el servidor rechace la conexión por bot detection
+    # Headers de navegador real
     try:
         from urllib.parse import urlparse
-        parsed = urlparse(ws_url)
-        origin_host = f"{parsed.scheme.replace('wss','https').replace('ws','http')}://{parsed.netloc}"
+        parsed_url = urlparse(ws_url)
+        origin_host = f"{parsed_url.scheme.replace('wss','https').replace('ws','http')}://{parsed_url.netloc}"
     except Exception:
         origin_host = "https://spribegaming.com"
 
@@ -812,7 +806,7 @@ def _start_ws(bm_id):
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     }
-    log.info("[%s] Headers WebSocket: Origin=%s Host=%s", name, headers["Origin"], headers["Host"])
+    log.info("[%s] Headers: Origin=%s Host=%s", name, headers["Origin"], headers["Host"])
 
     import ssl as _ssl
     ssl_opts = {"cert_reqs": _ssl.CERT_NONE, "check_hostname": False}
@@ -834,17 +828,7 @@ def _start_ws(bm_id):
 
 
 def _record_crash(bm_id, bm_name, multiplier, round_id=None):
-    """
-    Registra crash con dedup en 3 capas para evitar duplicados:
-
-    Capa 1 — round_id exacto: si ya existe un entry con ese round_id → skip.
-    Capa 2 — enriquecimiento: si llega round_id y ya hay un entry sin round_id
-             con el mismo valor en los últimos 15s → solo añade round_id, sin duplicar.
-    Capa 3 — ventana temporal: mismo valor registrado en los últimos 15s → skip.
-             (Cubre reconexiones rápidas, doble-decodificación sfs_hdr/sfs_hdr_zlib,
-              y el caso en que on_message registra el mismo crash desde dos frames
-              con distinto label pero idéntico contenido.)
-    """
+    """Registra crash con dedup en 3 capas."""
     now = datetime.now(timezone.utc)
     mult = round(float(multiplier), 2)
 
@@ -855,7 +839,7 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
                 log.debug("[%s] Dedup capa1: roundId=%s ya existe", bm_name, round_id)
                 return
 
-    # Capa 2: roundChartInfo confirma un crashX previo — enriquecer sin duplicar
+    # Capa 2: enriquecer con round_id sin duplicar
     if round_id is not None:
         for prev in reversed(crashes.get(bm_id, [])[-5:]):
             try:
@@ -864,13 +848,12 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
                     break
                 if round(float(prev["multiplier"]), 2) == mult and prev.get("round_id") is None:
                     prev["round_id"] = round_id
-                    log.debug("[%s] Dedup capa2: roundChartInfo %.2fx enriquece crashX", bm_name, mult)
+                    log.debug("[%s] Dedup capa2: enriqueció %.2fx con roundId", bm_name, mult)
                     return
             except:
                 pass
 
-    # Capa 3: mismo valor en los últimos 15s (ventana ampliada para cubrir
-    # doble-decodificación y reconexiones rápidas del watchdog)
+    # Capa 3: mismo valor en últimos 15s
     for prev in reversed(crashes.get(bm_id, [])[-10:]):
         try:
             prev_t = datetime.fromisoformat(prev["timestamp"])
@@ -897,12 +880,11 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     for q in sse_subscribers.get(bm_id, []):
         try: q.put_nowait(entry)
         except: pass
-    log.info("[%s] ★★★ CRASH RECORDED: %.2fx (round_id=%s) ★★★", bm_name, mult, round_id)
-    # Guardar en disco de forma asíncrona para no bloquear SSE
+    log.info("[%s] ★★★ CRASH RECORDED: %.2fx (round_id=%s) total=%d ★★★",
+             bm_name, mult, round_id, len(crashes.get(bm_id, [])))
     threading.Thread(target=_save_crashes, daemon=True).start()
 
 def _stop_ws(bm_id):
-    # Invalidar generación primero para neutralizar on_close/on_error del hilo actual
     ws_generation[bm_id] = ws_generation.get(bm_id, 0) + 1
     ws = ws_connections.pop(bm_id, None)
     if ws:
@@ -982,11 +964,6 @@ def get_crashes(bid):
 
 @app.route("/api/aviator/rounds/<int:num_id>", methods=["GET"])
 def get_rounds_by_num(num_id):
-    """
-    Endpoint estilo aviator-szte: GET /api/aviator/rounds/<num_id>?limit=10
-    Permite acceder a crashes de un bookmaker por su ID numérico corto.
-    Ejemplo: /api/aviator/rounds/2?limit=50
-    """
     bid = _num_to_bid.get(num_id)
     if not bid or bid not in bookmakers:
         return jsonify({"error": f"Bookmaker #{num_id} not found"}), 404
@@ -1008,18 +985,16 @@ def get_rounds_by_num(num_id):
 def stream_crashes(bid):
     if bid not in bookmakers: return jsonify({"error": "Not found"}), 404
     q = Queue(maxsize=100); sse_subscribers[bid].append(q)
-    # Enviar los últimos 30 crashes al conectar (para que el cliente tenga estado inicial)
     initial = crashes.get(bid, [])[-30:]
     def gen():
         try:
-            # Enviar estado inicial al conectar
             yield f"event: init\ndata: {json.dumps(initial)}\n\n"
             while True:
                 try:
-                    e = q.get(timeout=5)   # 5s timeout → heartbeat frecuente
+                    e = q.get(timeout=5)
                     yield f"data: {json.dumps(e)}\n\n"
                 except Empty:
-                    yield ": hb\n\n"    # heartbeat cada 5s mantiene conexión viva
+                    yield ": hb\n\n"
         except GeneratorExit: pass
         finally:
             try: sse_subscribers[bid].remove(q)
@@ -1041,11 +1016,10 @@ def get_debug(bid):
 
 @app.route("/health")
 def health():
-    # NOTA: active_connections y total_crashes coinciden con el JS de admin.html
     return jsonify({
         "status": "ok",
         "bookmakers": len(bookmakers),
-        "active_connections": sum(1 for s in connection_status.values() if s in ("connected", "connecting")),
+        "active_connections": sum(1 for s in connection_status.values() if s in ("connected", "connecting", "reconnecting")),
         "total_crashes": sum(len(v) for v in crashes.values()),
     })
 
@@ -1064,16 +1038,30 @@ def ingest_crash(bid):
     _record_crash(bid, name, float(mult))
     return jsonify({"ok": True, "multiplier": mult}), 201
 
+@app.route("/api/aviator/bookmakers/<bid>/clear-crashes", methods=["POST"])
+def clear_crashes_endpoint(bid):
+    """Limpia todos los crashes de un bookmaker — reset manual."""
+    if bid not in bookmakers:
+        return jsonify({"error": "Not found"}), 404
+    count = len(crashes.get(bid, []))
+    crashes[bid] = []
+    _save_crashes()
+    name = bookmakers[bid].get("name", bid)
+    log.info("[%s] ★ CRASHES CLEARED (%d removed) ★", name, count)
+    return jsonify({"ok": True, "cleared": count})
+
+@app.route("/api/clear-all-crashes", methods=["POST"])
+def clear_all_crashes():
+    """Limpia crashes de TODOS los bookmakers."""
+    total = sum(len(v) for v in crashes.values())
+    for k in crashes:
+        crashes[k] = []
+    _save_crashes()
+    log.info("★ ALL CRASHES CLEARED (%d total) ★", total)
+    return jsonify({"ok": True, "cleared": total})
+
 @app.route("/api/export-config")
 def export_config():
-    """
-    Exporta la config actual lista para copiar como BOOKMAKERS_JSON en Render.
-    Úsala después de agregar bookmakers desde la UI:
-      1. Ve a /api/export-config
-      2. Copia el JSON
-      3. En Render → Environment → BOOKMAKERS_JSON = <JSON copiado>
-      4. Manual Deploy
-    """
     export = {
         "bookmakers": bookmakers,
         "crashes": {}
@@ -1093,12 +1081,7 @@ def _autostart():
 threading.Thread(target=_autostart, daemon=True).start()
 
 def _watchdog():
-    """
-    Revisa cada 20s si los bookmakers activos siguen conectados.
-    Si encuentra status 'error' o 'disconnected', reconecta.
-    Resuelve el problema de Render free tier que duerme el servicio.
-    """
-    time.sleep(15)  # esperar que el autostart termine
+    time.sleep(15)
     while True:
         try:
             for bid, bm in list(bookmakers.items()):
@@ -1108,7 +1091,7 @@ def _watchdog():
                 if status in ("error", "disconnected"):
                     log.info("[watchdog] %s está en '%s' — reconectando...", bm.get("name", bid), status)
                     _start_ws(bid)
-                    time.sleep(2)  # evitar reconectar todos al mismo tiempo
+                    time.sleep(2)
         except Exception as e:
             log.error("[watchdog] Error: %s", e)
         time.sleep(20)
