@@ -533,15 +533,17 @@ def _start_ws(bm_id):
     if not ws_url:
         connection_status[bm_id] = "error"; return
 
-    # Cerrar conexión anterior limpiamente si existe
+    # PRIMERO incrementar generación — así el hilo viejo queda obsoleto
+    # antes de que reciba el close y trate de pisar el estado
+    gen = ws_generation.get(bm_id, 0) + 1
+    ws_generation[bm_id] = gen
+
+    # Ahora sí cerrar la conexión anterior — si dispara on_close,
+    # ese hilo verá gen desactualizado y no tocará nada
     old_ws = ws_connections.pop(bm_id, None)
     if old_ws:
         try: old_ws.close()
         except: pass
-
-    # Nueva generación — cualquier hilo anterior se descartará al verificar gen
-    gen = ws_generation.get(bm_id, 0) + 1
-    ws_generation[bm_id] = gen
 
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
@@ -782,6 +784,8 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     threading.Thread(target=_save_crashes, daemon=True).start()
 
 def _stop_ws(bm_id):
+    # Invalidar generación primero para neutralizar on_close/on_error del hilo actual
+    ws_generation[bm_id] = ws_generation.get(bm_id, 0) + 1
     ws = ws_connections.pop(bm_id, None)
     if ws:
         try: ws.close()
