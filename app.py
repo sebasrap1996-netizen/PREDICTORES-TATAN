@@ -546,8 +546,6 @@ def _start_ws(bm_id):
                   "login_done": False, "msg3_sent": False}
     stats = {"sent": 0, "recv_bin": 0, "recv_txt": 0}
     last_frame_time = [time.time()]   # v8.6: tracker de último frame recibido
-    last_x = [None]          # último x en vuelo — fallback crash si no llega crashX
-    round_crash_registered = [False]  # True si ya registramos crash de esta ronda
 
     def send_msg(ws, msg, idx, label_type):
         if not msg: return
@@ -759,33 +757,6 @@ def _start_ws(bm_id):
             mults, rid = extract_game_mults(parsed, name)
             for m in mults:
                 _record_crash(bm_id, name, m, rid)
-                round_crash_registered[0] = True
-            # ── Trackear x en vuelo y detectar crashes sin crashX ──
-            if parsed and isinstance(parsed.get("p"), dict):
-                _pp = parsed["p"]
-                _cmd = _pp.get("c", "")
-                _ip  = _pp.get("p", {})
-                if isinstance(_ip, dict):
-                    if _cmd == "x":
-                        # Guardar último x visto durante el vuelo
-                        _xv = _ip.get("x")
-                        if isinstance(_xv, (int, float)) and _xv >= 1.0:
-                            last_x[0] = round(float(_xv), 2)
-                    elif _cmd == "changeState":
-                        _sid = _ip.get("newStateId")
-                        if _sid == 1:
-                            # Fase de apuestas: ronda terminó
-                            # Si no registramos crash aún, usar last_x como fallback
-                            if not round_crash_registered[0] and last_x[0] is not None:
-                                log.info("[%s] ✦ Crash fallback via changeState(1): %.2fx", name, last_x[0])
-                                _record_crash(bm_id, name, last_x[0])
-                            # Reset para la próxima ronda
-                            last_x[0] = None
-                            round_crash_registered[0] = False
-                        elif _sid == 2:
-                            # Inicio de vuelo: reset (nueva ronda empieza)
-                            last_x[0] = None
-                            round_crash_registered[0] = False
 
         # ── Frame 0 capture: si aún no estamos authenticated pero es game data ──
         elif is_game and parsed:
