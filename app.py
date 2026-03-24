@@ -693,7 +693,10 @@ def _start_ws(bm_id):
     ws_connections[bm_id] = ws_app
     t = threading.Thread(
         target=ws_app.run_forever,
-        kwargs={"ping_interval": 45, "ping_timeout": 40, "sslopt": ssl_opts},
+        # NO enviar pings WebSocket — SFS2X/Spribe no responde pongs
+        # y websocket-client cierra la conexión al expirar ping_timeout.
+        # SFS2X tiene su propio keepalive interno.
+        kwargs={"ping_interval": 0, "ping_timeout": None, "sslopt": ssl_opts},
         daemon=True,
     )
     t.start()
