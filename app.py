@@ -1,11 +1,10 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.5 — Fix pauses periódicas y reconnecting cada X minutos:
-  1. SFS2X Ping/Pong: responde al frame c=7 del servidor (keepalive)
-     → sin esto el servidor desconecta cada ~60s → pause de 8s → reconnecting
-  2. Fix thread leak: _record_crash ya no spawna thread por cada crash
-     → usa flag _save_pending + _periodic_save para guardar en batch
-  3. Mantiene todos los fixes v8.4 (server_disconnect dr, backoff, zombie, init recovery)
+v8.7 — Fix reconnecting cada 2m30s (hard timeout Spribe = 150s):
+  El servidor cierra TODAS las conexiones exactamente cada 150s (política Spribe).
+  Solución: reconexión PROACTIVA a los 120s — la nueva conexión se establece ANTES
+  de que el servidor cierre la vieja, eliminando el gap visible de reconnecting.
+  Mantiene todos los fixes v8.6 (ping/pong, silence watchdog, backoff, zombie, dr0/dr1)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -58,7 +57,7 @@ _num_to_bid: dict = {}
 ws_generation: dict = {}
 ws_reconnect_attempts: dict = {}   # contador de reintentos por bookmaker
 ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zombies)
-_save_pending = False              # v8.5: flag para guardar crashes en batch (evita thread leak)
+_save_event = threading.Event()    # v8.6: thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
 
 def _load_config():
@@ -540,6 +539,7 @@ def _start_ws(bm_id):
     auth_state = {"step": "wait_connect", "handshake_done": False,
                   "login_done": False, "msg3_sent": False}
     stats = {"sent": 0, "recv_bin": 0, "recv_txt": 0}
+    last_frame_time = [time.time()]   # v8.6: tracker de último frame recibido
 
     def send_msg(ws, msg, idx, label_type):
         if not msg: return
@@ -560,13 +560,40 @@ def _start_ws(bm_id):
     def on_open(ws):
         log.info("[%s] ✓ CONNECTED gen=%d", name, gen)
         connection_status[bm_id] = "connected"
-        ws_reconnect_attempts[bm_id] = 0   # ← v8.2: reset contador al conectar bien
+        ws_reconnect_attempts[bm_id] = 0
         auth_state["step"] = "wait_handshake_resp"
         send_msg(ws, msg1, 1, "Handshake")
+
+        # v8.6: watchdog por conexión — detecta silent disconnect (>45s sin frames)
+        def _silence_watchdog():
+            time.sleep(30)   # dar tiempo al auth
+            while ws_generation.get(bm_id) == gen:
+                silence = time.time() - last_frame_time[0]
+                if silence > 45:
+                    log.warning("[%s] ⏱ Silencio %.0fs sin frames — reconectando", name, silence)
+                    try: ws.close()
+                    except: pass
+                    return
+                time.sleep(10)
+        threading.Thread(target=_silence_watchdog, daemon=True).start()
+
+        # v8.7: reconexión PROACTIVA a los 120s para evitar hard timeout Spribe (150s)
+        # La nueva conexión se establece ANTES de que el servidor cierre la vieja
+        # → elimina el gap visible de "reconnecting" cada 2m30s
+        def _proactive_reconnect():
+            time.sleep(120)
+            if ws_generation.get(bm_id) == gen and \
+               bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
+               connection_status.get(bm_id) != "error":
+                log.info("[%s] ↺ Reconexión proactiva (120s) — evitando timeout Spribe", name)
+                _start_ws(bm_id)   # incrementa gen, arranca nueva conexión
+                # La vieja conexión cierra sola a los ~150s (server-side) sin disparar reconexión
+        threading.Thread(target=_proactive_reconnect, daemon=True).start()
 
     def on_message(ws, message):
         if ws_generation.get(bm_id) != gen:
             return
+        last_frame_time[0] = time.time()   # v8.6: actualizar timestamp en cada frame
 
         # ── TEXT frames ──
         if isinstance(message, str):
@@ -754,9 +781,10 @@ def _start_ws(bm_id):
                 # Recibió muy poco → conexión inestable
                 delay = min(10 * (2 ** min(attempts - 1, 3)), 80)  # 10, 20, 40, 80s
             else:
-                # Conexión estaba bien, cierre normal del servidor → reconectar rápido
+                # Conexión estaba bien (cierre normal del servidor / dr=0)
+                # v8.6: delay reducido 8s → 2s para minimizar pausa visible
                 ws_reconnect_attempts[bm_id] = 0   # reset: no fue un fallo
-                delay = 8
+                delay = 2
 
             connection_status[bm_id] = "reconnecting"
             log.info("[%s] Reconnect in %ds (intento #%d)...", name, delay, attempts)
@@ -845,9 +873,8 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
         except: pass
     log.info("[%s] ★★★ CRASH: %.2fx round=%s total=%d ★★★",
              bm_name, mult, round_id, len(crashes[bm_id]))
-    # v8.5: marcar pendiente en vez de crear un thread por cada crash (evita thread leak)
-    global _save_pending
-    _save_pending = True
+    # v8.5/v8.6: marcar pendiente (thread-safe Event) en vez de thread por crash
+    _save_event.set()
 
 
 def _stop_ws(bm_id):
@@ -1048,15 +1075,14 @@ def _watchdog():
 threading.Thread(target=_watchdog, daemon=True).start()
 
 def _periodic_save():
-    global _save_pending
-    time.sleep(30)
     while True:
-        try:
-            if _save_pending:
+        # Espera hasta que haya cambios (o máx 30s para forzar guardado periódico)
+        _save_event.wait(timeout=30)
+        if _save_event.is_set():
+            try:
                 _save_crashes()
-                _save_pending = False
-        except: pass
-        time.sleep(15)  # v8.5: cada 15s si hay cambios (antes 60s fijo)
+            except: pass
+            _save_event.clear()
 threading.Thread(target=_periodic_save, daemon=True).start()
 
 if __name__ == "__main__":
