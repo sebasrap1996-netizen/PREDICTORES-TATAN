@@ -615,29 +615,29 @@ def _start_ws(bm_id):
         log.error("[%s] ✗ ERROR gen=%d: %s", name, gen, error)
 
     def on_close(ws, code, msg):
-        log.info("[%s] CLOSED gen=%d code=%s | sent=%d bin=%d txt=%d",
-                 name, gen, code, stats["sent"], stats["recv_bin"], stats["recv_txt"])
+        total_recv = stats["recv_bin"] + stats["recv_txt"]
+        log.info("[%s] CLOSED gen=%d code=%s | sent=%d recv=%d",
+                 name, gen, code, stats["sent"], total_recv)
         if ws_generation.get(bm_id) != gen:
             return
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
-            # Backoff: si no recibió nada → 10s, si recibió poco → 5s, si iba bien → 5s
-            total_recv = stats["recv_bin"] + stats["recv_txt"]
+            # Backoff progresivo según cuántos frames recibió:
+            # - 0 frames = nunca conectó bien → 15s (evitar hammering)
+            # - pocos frames = conexión inestable → 10s
+            # - muchos frames = estaba bien, cierre normal → 8s
             if total_recv == 0:
-                delay = 10  # Nunca conectó bien — esperar más
+                delay = 15
+            elif total_recv < 10:
+                delay = 10
             else:
-                delay = 5   # Estaba funcionando — reconectar normal
-            # NO cambiar a "reconnecting" si va a reconectar rápido —
-            # mantener "connected" para que la UI no parpadee
+                delay = 8
             connection_status[bm_id] = "reconnecting"
-            log.info("[%s] Reconnect in %ds (received %d frames)...", name, delay, total_recv)
+            log.info("[%s] Reconnect in %ds...", name, delay)
             def _reconn():
                 time.sleep(delay)
                 if ws_generation.get(bm_id) == gen and \
                    bm_id in bookmakers and bookmakers[bm_id].get("active", False):
                     _start_ws(bm_id)
-                else:
-                    # Si gen cambió, alguien más ya reconectó — no hacer nada
-                    pass
             threading.Thread(target=_reconn, daemon=True).start()
         else:
             connection_status[bm_id] = "disconnected"
@@ -672,7 +672,7 @@ def _start_ws(bm_id):
     ws_connections[bm_id] = ws_app
     t = threading.Thread(
         target=ws_app.run_forever,
-        kwargs={"ping_interval": 30, "ping_timeout": 25, "sslopt": ssl_opts},
+        kwargs={"ping_interval": 45, "ping_timeout": 40, "sslopt": ssl_opts},
         daemon=True,
     )
     t.start()
@@ -888,22 +888,22 @@ def _autostart():
 threading.Thread(target=_autostart, daemon=True).start()
 
 def _watchdog():
-    """Safety net: solo reconecta bookmakers que llevan >45s sin conexión activa."""
-    time.sleep(30)
+    """Safety net: solo reconecta bookmakers que están muertos (error/disconnected).
+    NO toca 'reconnecting' — on_close ya maneja eso."""
+    time.sleep(45)
     while True:
         try:
             for bid, bm in list(bookmakers.items()):
                 if not bm.get("active", False): continue
                 status = connection_status.get(bid, "disconnected")
-                # Solo actuar si está completamente muerto — NO tocar "reconnecting"
-                # porque on_close ya está manejando la reconexión
+                # Solo actuar si completamente muerto
                 if status in ("error", "disconnected"):
-                    log.info("[watchdog] %s status='%s' — reconnecting", bm.get("name", bid), status)
+                    log.info("[watchdog] %s dead (%s) — restarting", bm.get("name", bid), status)
                     _start_ws(bid)
                     time.sleep(5)
         except Exception as e:
             log.error("[watchdog] %s", e)
-        time.sleep(45)
+        time.sleep(60)  # Cada 60s — no competir con on_close
 threading.Thread(target=_watchdog, daemon=True).start()
 
 def _periodic_save():
