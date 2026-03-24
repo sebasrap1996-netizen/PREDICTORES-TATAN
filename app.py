@@ -1,11 +1,13 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.8 — Fix ec=28 falso positivo por sesión duplicada transitoria:
-  1. _start_ws: espera 2s tras cerrar la conexión vieja antes de hacer login
-     → da tiempo al servidor para registrar el cierre antes del nuevo login
-  2. login_error ec=28: reintenta hasta 3 veces con backoff (5s/15s/60s)
-     antes de marcar error permanente — distingue duplicado transitorio de ban real
-  3. Mantiene todos los fixes v8.7 (reconexión proactiva 120s, silence watchdog, etc.)
+v8.9 — Fix pausa de crashes en vivo (race condition en reconexión proactiva):
+  1. _start_ws acepta _delay=N: si N>0 lanza un hilo y retorna inmediatamente
+     → ningún caller queda bloqueado por time.sleep(2) del antiguo v8.8
+  2. _proactive_reconnect usa _start_ws(bm_id, _delay=2) en vez de llamar
+     directamente — elimina la ventana donde old gen y new gen coexistían
+  3. on_close loguea con DEBUG cuando ignora un cierre de gen antiguo
+     (facilita diagnóstico futuro)
+  4. Mantiene todos los fixes v8.8 (ec=28 retry backoff, etc.)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -510,7 +512,15 @@ def _b64_to_bytes(s):
     except: return b""
 
 
-def _start_ws(bm_id):
+def _start_ws(bm_id, _delay=0):
+    """Arranca WebSocket para bm_id. Si _delay>0 espera en hilo separado (no bloquea)."""
+    if _delay > 0:
+        def _deferred():
+            time.sleep(_delay)
+            _start_ws(bm_id, _delay=0)
+        threading.Thread(target=_deferred, daemon=True).start()
+        return
+
     bm = bookmakers.get(bm_id)
     if not bm: return
     ws_url = bm.get("ws_url", "").strip()
@@ -528,10 +538,6 @@ def _start_ws(bm_id):
     for zombie in ws_all_connections.pop(bm_id, []):
         try: zombie.close()
         except: pass
-
-    # v8.8: pausa 2s para que el servidor registre el cierre antes del nuevo login
-    # Sin esto, la reconexión proactiva puede provocar ec=28 (sesión duplicada transitoria)
-    time.sleep(2)
 
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
@@ -593,8 +599,7 @@ def _start_ws(bm_id):
                bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
                connection_status.get(bm_id) != "error":
                 log.info("[%s] ↺ Reconexión proactiva (120s) — evitando timeout Spribe", name)
-                _start_ws(bm_id)   # incrementa gen, arranca nueva conexión
-                # La vieja conexión cierra sola a los ~150s (server-side) sin disparar reconexión
+                _start_ws(bm_id, _delay=2)   # v8.9: delay=2 no bloquea el hilo actual
         threading.Thread(target=_proactive_reconnect, daemon=True).start()
 
     def on_message(ws, message):
@@ -788,6 +793,8 @@ def _start_ws(bm_id):
             if ws in lst: lst.remove(ws)
         except: pass
         if ws_generation.get(bm_id) != gen:
+            log.debug("[%s] on_close gen=%d ignorado — gen actual=%d (nueva conexión ya activa)",
+                      name, gen, ws_generation.get(bm_id, -1))
             return
         # No reconectar si el login fue rechazado (credenciales malas)
         if connection_status.get(bm_id) == "error":
@@ -820,7 +827,7 @@ def _start_ws(bm_id):
                 if ws_generation.get(bm_id) == gen and \
                    bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
                    connection_status.get(bm_id) != "error":
-                    _start_ws(bm_id)
+                    _start_ws(bm_id)   # sin _delay extra — ya esperamos arriba
             threading.Thread(target=_reconn, daemon=True).start()
         else:
             connection_status[bm_id] = "disconnected"
