@@ -98,6 +98,9 @@ def _load_config():
             log.info("Restored %d crashes from disk", sum(len(v) for v in crashes.values()))
         except Exception as e:
             log.error("crashes.json fail: %s", e)
+    for bid, bm in bookmakers.items():
+        if bm.get("active", False):
+            connection_status[bid] = "connecting"
     total = sum(len(v) for v in crashes.values())
     log.info("★ READY: %d bookmakers, %d crashes ★", len(bookmakers), total)
 
@@ -510,7 +513,15 @@ def _b64_to_bytes(s):
     except: return b""
 
 
-def _start_ws(bm_id):
+def _start_ws(bm_id, _delay=0):
+    """Arranca WS. _delay>0 → espera en hilo separado, no bloquea al caller."""
+    if _delay > 0:
+        def _deferred():
+            time.sleep(_delay)
+            _start_ws(bm_id, _delay=0)
+        threading.Thread(target=_deferred, daemon=True).start()
+        return
+
     bm = bookmakers.get(bm_id)
     if not bm: return
     ws_url = bm.get("ws_url", "").strip()
@@ -520,7 +531,7 @@ def _start_ws(bm_id):
     gen = ws_generation.get(bm_id, 0) + 1
     ws_generation[bm_id] = gen
 
-    # v8.3: matar TODOS los zombies previos (no solo el último guardado)
+    # matar zombies previos
     old = ws_connections.pop(bm_id, None)
     if old:
         try: old.close()
@@ -528,10 +539,6 @@ def _start_ws(bm_id):
     for zombie in ws_all_connections.pop(bm_id, []):
         try: zombie.close()
         except: pass
-
-    # v8.8: pausa 2s para que el servidor registre el cierre antes del nuevo login
-    # Sin esto, la reconexión proactiva puede provocar ec=28 (sesión duplicada transitoria)
-    time.sleep(2)
 
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
@@ -543,7 +550,8 @@ def _start_ws(bm_id):
     log.info("[%s] ═══ CONNECTING gen=%d to %s ═══", name, gen, ws_url)
 
     auth_state = {"step": "wait_connect", "handshake_done": False,
-                  "login_done": False, "msg3_sent": False}
+                  "login_done": False, "msg3_sent": False,
+                  "login_retries": 0}
     stats = {"sent": 0, "recv_bin": 0, "recv_txt": 0}
     last_frame_time = [time.time()]   # v8.6: tracker de último frame recibido
 
@@ -567,7 +575,6 @@ def _start_ws(bm_id):
         log.info("[%s] ✓ CONNECTED gen=%d", name, gen)
         connection_status[bm_id] = "connected"
         ws_reconnect_attempts[bm_id] = 0
-        ws_login_retries[bm_id] = 0       # v8.8: reset reintentos de login al conectar
         auth_state["step"] = "wait_handshake_resp"
         send_msg(ws, msg1, 1, "Handshake")
 
@@ -593,8 +600,7 @@ def _start_ws(bm_id):
                bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
                connection_status.get(bm_id) != "error":
                 log.info("[%s] ↺ Reconexión proactiva (120s) — evitando timeout Spribe", name)
-                _start_ws(bm_id)   # incrementa gen, arranca nueva conexión
-                # La vieja conexión cierra sola a los ~150s (server-side) sin disparar reconexión
+                _start_ws(bm_id, _delay=2)   # _delay evita bloquear este hilo
         threading.Thread(target=_proactive_reconnect, daemon=True).start()
 
     def on_message(ws, message):
@@ -663,17 +669,16 @@ def _start_ws(bm_id):
         # ── v8.2/v8.8: LOGIN RECHAZADO ──
         elif ftype == "login_error":
             ec = parsed.get("p", {}).get("ec", "?") if parsed else "?"
-            retries = ws_login_retries.get(bm_id, 0)
-            # Reintentar hasta 3 veces — ec=28 puede ser duplicado transitorio (no ban real)
-            # Backoff: intento 1→5s, 2→15s, 3→60s, 4+→error permanente
+            retries = auth_state["login_retries"]
+            # ec=28 = sesión duplicada transitoria — contador por gen, no acumula
+            # Backoff: intento 1→5s, 2→15s, 3→60s
             if retries < 3:
                 delays = [5, 15, 60]
                 delay = delays[retries]
-                ws_login_retries[bm_id] = retries + 1
-                log.warning("[%s] ✗ LOGIN ec=%s (intento %d/3) — reintentando en %ds "
-                            "(puede ser sesión duplicada transitoria)",
+                auth_state["login_retries"] += 1
+                log.warning("[%s] ✗ LOGIN ec=%s (intento %d/3 esta gen) — reintentando en %ds",
                             name, ec, retries + 1, delay)
-                ws_generation[bm_id] = gen + 1  # cancela este gen
+                ws_generation[bm_id] = gen + 1
                 ws.close()
                 def _retry_login():
                     time.sleep(delay)
@@ -682,8 +687,7 @@ def _start_ws(bm_id):
                         _start_ws(bm_id)
                 threading.Thread(target=_retry_login, daemon=True).start()
             else:
-                # 3 intentos fallidos → ban real o token expirado
-                ws_login_retries[bm_id] = 0
+                # 3 intentos fallidos en esta gen → ban real o token expirado
                 log.error("[%s] ✗ LOGIN RECHAZADO definitivo (ec=%s) tras 3 intentos — "
                           "token expirado / ban real. Actualiza msg2_b64 en el admin.", name, ec)
                 connection_status[bm_id] = "error"
@@ -788,6 +792,8 @@ def _start_ws(bm_id):
             if ws in lst: lst.remove(ws)
         except: pass
         if ws_generation.get(bm_id) != gen:
+            log.debug("[%s] on_close gen=%d ignorado — gen actual=%d",
+                      name, gen, ws_generation.get(bm_id, -1))
             return
         # No reconectar si el login fue rechazado (credenciales malas)
         if connection_status.get(bm_id) == "error":
@@ -1072,16 +1078,14 @@ def export_config():
 _load_config()
 
 def _autostart():
-    """Conecta todos los bookmakers activos. Se llama desde post_fork de Gunicorn
-    (dentro del worker) y también al arrancar en modo desarrollo directo."""
+    """Conecta todos los bookmakers activos.
+    Llamado desde post_fork (Gunicorn) o directo (python app.py)."""
     time.sleep(2)
     for bid, bm in list(bookmakers.items()):
         if bm.get("active", False):
             log.info("Auto-start: %s", bm.get("name", bid))
             _start_ws(bid); time.sleep(1)
 
-# Solo arrancar aquí si NO estamos bajo Gunicorn (ej: python app.py directo)
-# Bajo Gunicorn con preload_app=True el autostart ocurre en post_fork (gunicorn_conf.py)
 import os as _os
 if not _os.environ.get("GUNICORN_WORKER_STARTED"):
     threading.Thread(target=_autostart, daemon=True).start()
