@@ -249,6 +249,9 @@ TICK_COMMANDS = {
     "tick", "update",
     "updateCurrentCashOuts", "currentCashOuts", "cashouts",
     "B", "T", "S",
+    # Spribe: frames con listas de jugadores/cashouts — NO son crashes
+    "updateCurrentBets", "currentBetsInfo",
+    "onlinePlayers",
 }
 
 STATE_COMMANDS = {
@@ -256,6 +259,10 @@ STATE_COMMANDS = {
     "gameStateHandler",
     "statsHandler",
     "S", "T", "B", "C",
+    # Spribe: cambio de estado de ronda (betting phase, no crash)
+    "changeState",
+    # Spribe: historial al conectar — NO registrar como crashes en vivo
+    "init",
 }
 
 
@@ -297,9 +304,15 @@ def extract_game_mults(obj, label=""):
     p = obj.get("p")
     if not isinstance(p, dict): return [], None
     inner_p = p.get("p"); cmd = p.get("c", "")
-    if isinstance(cmd, str) and cmd.lower() in {c.lower() for c in TICK_COMMANDS}:
-        has_crash_x = isinstance(inner_p, dict) and "crashX" in inner_p
-        if not has_crash_x: return [], None
+    # Filtrar ticks en vuelo Y frames de estado — NO contienen crashes reales
+    if isinstance(cmd, str):
+        cmd_l = cmd.lower()
+        skip_cmds = {c.lower() for c in TICK_COMMANDS} | {c.lower() for c in STATE_COMMANDS}
+        if cmd_l in skip_cmds:
+            # Única excepción: ext:x con crashX = crash real
+            has_crash_x = isinstance(inner_p, dict) and "crashX" in inner_p
+            if not has_crash_x:
+                return [], None
     round_id = None
     if isinstance(inner_p, dict): round_id = inner_p.get("roundId")
     results = []
@@ -318,9 +331,17 @@ def extract_game_mults(obj, label=""):
 
 def _scan_game_obj(obj, label="", cmd="", depth=0):
     if depth > 8 or not isinstance(obj, dict): return []
+    # Si este dict huele a cashout de jugador (tiene player_id, betId, winAmount),
+    # NO extraer multiplier de aquí — es el mult al que cashouteo el jugador, NO el crash
+    if any(k in obj for k in ("player_id", "betId", "winAmount", "cashOutAt", "username")):
+        return []
     results = []
     for key, val in obj.items():
         if key in PROTOCOL_KEYS: continue
+        # Ignorar listas de cashouts/bets — contienen multiplier de jugadores
+        if key in ("cashouts", "cashOuts", "bets", "currentBets", "activeBets",
+                    "topPlayerProfileImages"):
+            continue
         if key in GAME_KEYS:
             X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
                              "crashValue", "endK", "crashMultiplier",
