@@ -1,11 +1,12 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.8 — Fix ec=28 falso positivo por sesión duplicada transitoria:
-  1. _start_ws: espera 2s tras cerrar la conexión vieja antes de hacer login
-     → da tiempo al servidor para registrar el cierre antes del nuevo login
-  2. login_error ec=28: reintenta hasta 3 veces con backoff (5s/15s/60s)
-     antes de marcar error permanente — distingue duplicado transitorio de ban real
-  3. Mantiene todos los fixes v8.7 (reconexión proactiva 120s, silence watchdog, etc.)
+v8.9 — Fix ec=28 en 1win (sesión duplicada al reconectar):
+  1. login_error: eliminado ws_generation[bm_id] = gen + 1 antes de _start_ws
+     → _start_ws ya incrementa el gen internamente; hacerlo dos veces dejaba
+       la conexión vieja "huérfana" sin cerrar limpiamente, generando ec=28
+  2. _start_ws: pausa pre-login aumentada de 2s a 5s
+     → 1win tarda más que Spribe en registrar el cierre de sesión en el servidor
+  Mantiene todos los fixes v8.8 (reintentos login, reconexión proactiva 120s, etc.)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -529,9 +530,10 @@ def _start_ws(bm_id):
         try: zombie.close()
         except: pass
 
-    # v8.8: pausa 2s para que el servidor registre el cierre antes del nuevo login
+    # v8.8: pausa 5s para que el servidor registre el cierre antes del nuevo login
     # Sin esto, la reconexión proactiva puede provocar ec=28 (sesión duplicada transitoria)
-    time.sleep(2)
+    # Aumentado de 2s a 5s para compatibilidad con 1win (más lento registrando cierres)
+    time.sleep(5)
 
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
@@ -673,7 +675,8 @@ def _start_ws(bm_id):
                 log.warning("[%s] ✗ LOGIN ec=%s (intento %d/3) — reintentando en %ds "
                             "(puede ser sesión duplicada transitoria)",
                             name, ec, retries + 1, delay)
-                ws_generation[bm_id] = gen + 1  # cancela este gen
+                # NO incrementar ws_generation aquí — _start_ws ya lo incrementa internamente.
+                # Incrementarlo dos veces dejaba la vieja conexión "huérfana" sin cerrar.
                 ws.close()
                 def _retry_login():
                     time.sleep(delay)
