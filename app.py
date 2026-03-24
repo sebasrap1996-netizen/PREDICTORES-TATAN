@@ -1,12 +1,11 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.3 — Fix reconnecting loop por sfs_c0_a1005 (server kick):
-  1. classify_frame: detecta server_disconnect (a=1005, dr) y login_error (ec!=0)
-  2. on_message: al recibir server_disconnect cancela reconexión del gen activo
-  3. on_close: backoff exponencial + respeta error/server_kicked
-  4. ws_reconnect_attempts: contador global de reintentos por bookmaker
-  5. send_delayed: no bloquea el hilo WS con time.sleep
-  6. Zombie cleanup: cierra todas las conexiones viejas al iniciar nueva gen
+v8.4 — Fix crashes perdidos en vivo:
+  1. classify_frame: handshake_resp ANTES que handshake_req (mismo c=0,a=0)
+  2. classify_frame: login_resp_ok para c=0,a=1,rs=0 (respuesta exitosa de login)
+  3. on_message: captura roundsInfo del frame init (crashes durante reconexión)
+  4. on_message: auth avanza correctamente en login_resp_ok
+  5. Mantiene todos los fixes v8.3 (server_disconnect, backoff, zombie cleanup)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -274,13 +273,18 @@ def classify_frame(obj):
     if not isinstance(obj, dict):
         return ("unknown", False)
     c = obj.get("c"); a = obj.get("a"); p = obj.get("p", {})
-    if c == 0 and a == 0: return ("handshake_req", False)
+    # v8.4: handshake_resp ANTES que handshake_req — ambos tienen c=0,a=0
+    # El servidor envía p={ct,ms,tk} en su respuesta; el cliente no envía p
     if c == 0 and isinstance(p, dict) and ("ct" in p or "ms" in p or "tk" in p):
         return ("handshake_resp", False)
+    if c == 0 and a == 0: return ("handshake_req", False)
     if c == 0 and a == 1:
-        # v8.2: el servidor responde con ec!=0 → error de login (token expirado, ban, sesión duplicada)
+        # v8.2: el servidor responde con ec!=0 → error de login
         if isinstance(p, dict) and p.get("ec", 0) != 0:
             return ("login_error", False)
+        # v8.4: login exitoso — el servidor devuelve rs=0, zn, un
+        if isinstance(p, dict) and "rs" in p:
+            return ("login_resp_ok", False)
         return ("login_req", False)
     if c == 1 and a == 0: return ("login_resp", False)
     # v8.3: SFS2X server-initiated disconnect (a=1005, p={dr:X})
@@ -620,6 +624,12 @@ def _start_ws(bm_id):
             ws.close()
             return
 
+        # ── v8.4: LOGIN EXITOSO (c=0,a=1,rs=0) → avanzar auth inmediatamente ──
+        elif step == "wait_login_resp" and ftype == "login_resp_ok":
+            auth_state["login_done"] = True
+            auth_state["step"] = "authenticated"
+            send_delayed(ws, msg3, 3, "Extension:currentBets")
+
         elif step == "wait_login_resp" and ftype in ("login_resp", "room_join"):
             auth_state["login_done"] = True
             auth_state["step"] = "authenticated"
@@ -651,6 +661,29 @@ def _start_ws(bm_id):
                 mults, rid = extract_game_mults(parsed, name)
                 for m in mults:
                     _record_crash(bm_id, name, m, rid)
+
+        # ── v8.4: Frame init — recuperar crashes perdidos durante reconexión ──
+        elif "init" in ftype and parsed:
+            inner_p = parsed.get("p", {}).get("p", {}) if isinstance(parsed.get("p"), dict) else {}
+            rounds_info = inner_p.get("roundsInfo", []) if isinstance(inner_p, dict) else []
+            if rounds_info:
+                bm_crashes_list = crashes.get(bm_id, [])
+                known_ids = {cr.get("round_id") for cr in bm_crashes_list if cr.get("round_id")}
+                # Ordenar por roundId asc para preservar orden cronológico
+                sorted_rounds = sorted(
+                    [r for r in rounds_info if isinstance(r, dict)],
+                    key=lambda x: x.get("roundId", 0)
+                )
+                recovered = 0
+                for r in sorted_rounds:
+                    rid  = r.get("roundId")
+                    mult = _parse_mult(r.get("maxMultiplier"))
+                    if mult and rid and rid not in known_ids:
+                        _record_crash(bm_id, name, mult, rid)
+                        known_ids.add(rid)
+                        recovered += 1
+                if recovered:
+                    log.info("[%s] ↺ Recuperados %d crashes perdidos del frame init", name, recovered)
 
         # ── Post-auth: captura normal ──
         elif auth_state["step"] == "authenticated" and is_game:
