@@ -602,15 +602,17 @@ def _start_ws(bm_id):
             send_delayed(ws, msg2, 2, "Login")
 
         # ── v8.3: SERVER DISCONNECT (sfs_c0_a1005 / dr=X) ──
-        # El servidor kickea esta sesión (sesión duplicada, timeout, etc.)
-        # No reconectar el gen activo — ya hay una nueva conexión más nueva
         elif "server_disconnect" in ftype:
-            dr = parsed.get("p", {}).get("dr", "?") if parsed else "?"
-            log.warning("[%s] ⚡ SERVER DISCONNECT gen=%d dr=%s — "
-                        "el servidor cerró esta sesión (duplicado/kick). "
-                        "Cancelando reconexión de este gen.", name, gen, dr)
-            # Avanzar generación para que on_close no reconecte
-            ws_generation[bm_id] = gen + 1
+            dr = parsed.get("p", {}).get("dr", -1) if parsed else -1
+            if dr == 1:
+                # dr=1 = sesión kickeada por duplicado — ya hay una nueva gen activa, no reconectar
+                log.warning("[%s] ⚡ SERVER DISCONNECT dr=1 — sesión reemplazada por gen más nuevo. "
+                            "Cancelando reconexión de gen=%d.", name, gen)
+                ws_generation[bm_id] = gen + 1
+            else:
+                # dr=0 u otros = cierre normal del servidor (timeout, mantenimiento, etc.)
+                # Dejar que on_close maneje la reconexión normalmente
+                log.info("[%s] SERVER DISCONNECT dr=%s — cierre normal, reconectará.", name, dr)
             return
 
         # ── v8.2: LOGIN RECHAZADO — detener reconexión, marcar error ──
@@ -1019,8 +1021,11 @@ def _watchdog():
             for bid, bm in list(bookmakers.items()):
                 if not bm.get("active", False): continue
                 status = connection_status.get(bid, "disconnected")
+                # "error" = credenciales rechazadas — NO reintentar automáticamente
+                if status == "error":
+                    continue
                 # Solo actuar si completamente muerto
-                if status in ("error", "disconnected"):
+                if status in ("disconnected",):
                     log.info("[watchdog] %s dead (%s) — restarting", bm.get("name", bid), status)
                     _start_ws(bid)
                     time.sleep(5)
