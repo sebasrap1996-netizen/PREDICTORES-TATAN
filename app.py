@@ -1,11 +1,11 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.1 — Basado en v6 (que FUNCIONABA) + mejoras:
-  1. classify_frame + extract_game_mults: RESTAURADOS de v6 sin cambios
-  2. Captura desde frame 0: auth en paralelo, no bloquea extracción
-  3. Persistencia: crashes se guardan en disco ordenados, se restauran al reiniciar
-  4. Reconexión robusta: on_close siempre reconecta + watchdog safety net
-  5. Endpoints de clear crashes
+v8.2 — Fix reconexión infinita:
+  1. classify_frame: detecta login_error (ec != 0) para no reconectar con credenciales malas
+  2. on_message: maneja login_error deteniendo reconexión automática
+  3. on_close: backoff exponencial (15→30→60→120→300s) para evitar hammering
+  4. ws_reconnect_attempts: contador global de reintentos por bookmaker
+  5. send_msg en hilos separados: no bloquea el hilo WS con time.sleep
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -56,6 +56,7 @@ MAX_DBG      = 200
 _bm_counter: int = 0
 _num_to_bid: dict = {}
 ws_generation: dict = {}
+ws_reconnect_attempts: dict = {}   # ← v8.2: contador de reintentos por bookmaker
 _save_lock = threading.Lock()
 
 def _load_config():
@@ -274,7 +275,11 @@ def classify_frame(obj):
     if c == 0 and a == 0: return ("handshake_req", False)
     if c == 0 and isinstance(p, dict) and ("ct" in p or "ms" in p or "tk" in p):
         return ("handshake_resp", False)
-    if c == 0 and a == 1: return ("login_req", False)
+    if c == 0 and a == 1:
+        # v8.2: el servidor responde con ec!=0 → error de login (token expirado, ban, sesión duplicada)
+        if isinstance(p, dict) and p.get("ec", 0) != 0:
+            return ("login_error", False)
+        return ("login_req", False)
     if c == 1 and a == 0: return ("login_resp", False)
     if c == 4: return ("room_join", False)
     if a == 13:
@@ -529,9 +534,17 @@ def _start_ws(bm_id):
         except Exception as e:
             log.error("[%s] ✗ SEND FAIL msg%d: %s", name, idx, e)
 
+    def send_delayed(ws, msg, idx, label_type, delay=0.1):
+        """v8.2: envía en hilo separado para NO bloquear on_message con time.sleep."""
+        def _send():
+            time.sleep(delay)
+            send_msg(ws, msg, idx, label_type)
+        threading.Thread(target=_send, daemon=True).start()
+
     def on_open(ws):
         log.info("[%s] ✓ CONNECTED gen=%d", name, gen)
         connection_status[bm_id] = "connected"
+        ws_reconnect_attempts[bm_id] = 0   # ← v8.2: reset contador al conectar bien
         auth_state["step"] = "wait_handshake_resp"
         send_msg(ws, msg1, 1, "Handshake")
 
@@ -565,20 +578,29 @@ def _start_ws(bm_id):
             log.info("[%s] Frame: %s (game=%s) decoded=%s",
                      name, ftype, is_game, _sj(parsed)[:600])
 
-        # ── Auth state machine (v6 logic) ──
+        # ── Auth state machine ──
         step = auth_state["step"]
 
         if step == "wait_handshake_resp" and ftype == "handshake_resp":
             auth_state["handshake_done"] = True
             auth_state["step"] = "wait_login_resp"
-            time.sleep(0.3)
-            send_msg(ws, msg2, 2, "Login")
+            send_delayed(ws, msg2, 2, "Login")
+
+        # ── v8.2: LOGIN RECHAZADO — detener reconexión, marcar error ──
+        elif ftype == "login_error":
+            ec = parsed.get("p", {}).get("ec", "?") if parsed else "?"
+            log.error("[%s] ✗ LOGIN RECHAZADO por servidor (ec=%s) — "
+                      "token expirado / sesión duplicada / ban. "
+                      "Actualiza msg2_b64 en el admin.", name, ec)
+            connection_status[bm_id] = "error"
+            ws_generation[bm_id] = gen + 1   # cancela reconexión automática
+            ws.close()
+            return
 
         elif step == "wait_login_resp" and ftype in ("login_resp", "room_join"):
             auth_state["login_done"] = True
             auth_state["step"] = "authenticated"
-            time.sleep(0.3)
-            send_msg(ws, msg3, 3, "Extension:currentBets")
+            send_delayed(ws, msg3, 3, "Extension:currentBets")
             # TAMBIÉN extraer de este frame
             if is_game and parsed:
                 mults, rid = extract_game_mults(parsed, name)
@@ -590,8 +612,7 @@ def _start_ws(bm_id):
             auth_state["step"] = "authenticated"
             if not auth_state["msg3_sent"]:
                 auth_state["msg3_sent"] = True
-                time.sleep(0.3)
-                send_msg(ws, msg3, 3, "Extension:currentBets")
+                send_delayed(ws, msg3, 3, "Extension:currentBets")
             if is_game and parsed:
                 mults, rid = extract_game_mults(parsed, name)
                 for m in mults:
@@ -601,8 +622,7 @@ def _start_ws(bm_id):
             # No es handshake resp — intentar login de todas formas
             auth_state["handshake_done"] = True
             auth_state["step"] = "wait_login_resp"
-            time.sleep(0.3)
-            send_msg(ws, msg2, 2, "Login")
+            send_delayed(ws, msg2, 2, "Login")
             # TAMBIÉN intentar extraer game data
             if is_game and parsed:
                 mults, rid = extract_game_mults(parsed, name)
@@ -641,23 +661,36 @@ def _start_ws(bm_id):
                  name, gen, code, stats["sent"], total_recv)
         if ws_generation.get(bm_id) != gen:
             return
+        # No reconectar si el login fue rechazado (credenciales malas)
+        if connection_status.get(bm_id) == "error":
+            log.warning("[%s] ⛔ No reconectando — login rechazado. "
+                        "Actualiza las credenciales (msg2_b64) en el admin.", name)
+            return
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
-            # Backoff progresivo según cuántos frames recibió:
-            # - 0 frames = nunca conectó bien → 15s (evitar hammering)
-            # - pocos frames = conexión inestable → 10s
-            # - muchos frames = estaba bien, cierre normal → 8s
+            # ── v8.2: Backoff exponencial según intentos fallidos ──
+            attempts = ws_reconnect_attempts.get(bm_id, 0) + 1
+            ws_reconnect_attempts[bm_id] = attempts
+
             if total_recv == 0:
-                delay = 15
+                # Nunca recibió nada → posible bloqueo de IP o WS URL incorrecta
+                delay = min(15 * (2 ** (attempts - 1)), 300)  # 15, 30, 60, 120, 300s
+                log.warning("[%s] Sin datos recibidos (intento #%d) — delay=%ds",
+                            name, attempts, delay)
             elif total_recv < 10:
-                delay = 10
+                # Recibió muy poco → conexión inestable
+                delay = min(10 * (2 ** min(attempts - 1, 3)), 80)  # 10, 20, 40, 80s
             else:
+                # Conexión estaba bien, cierre normal del servidor → reconectar rápido
+                ws_reconnect_attempts[bm_id] = 0   # reset: no fue un fallo
                 delay = 8
+
             connection_status[bm_id] = "reconnecting"
-            log.info("[%s] Reconnect in %ds...", name, delay)
+            log.info("[%s] Reconnect in %ds (intento #%d)...", name, delay, attempts)
             def _reconn():
                 time.sleep(delay)
                 if ws_generation.get(bm_id) == gen and \
-                   bm_id in bookmakers and bookmakers[bm_id].get("active", False):
+                   bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
+                   connection_status.get(bm_id) != "error":
                     _start_ws(bm_id)
             threading.Thread(target=_reconn, daemon=True).start()
         else:
