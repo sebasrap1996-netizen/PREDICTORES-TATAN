@@ -1,10 +1,11 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.7 — Fix reconnecting cada 2m30s (hard timeout Spribe = 150s):
-  El servidor cierra TODAS las conexiones exactamente cada 150s (política Spribe).
-  Solución: reconexión PROACTIVA a los 120s — la nueva conexión se establece ANTES
-  de que el servidor cierre la vieja, eliminando el gap visible de reconnecting.
-  Mantiene todos los fixes v8.6 (ping/pong, silence watchdog, backoff, zombie, dr0/dr1)
+v8.8 — Fix ec=28 falso positivo por sesión duplicada transitoria:
+  1. _start_ws: espera 2s tras cerrar la conexión vieja antes de hacer login
+     → da tiempo al servidor para registrar el cierre antes del nuevo login
+  2. login_error ec=28: reintenta hasta 3 veces con backoff (5s/15s/60s)
+     antes de marcar error permanente — distingue duplicado transitorio de ban real
+  3. Mantiene todos los fixes v8.7 (reconexión proactiva 120s, silence watchdog, etc.)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -57,7 +58,8 @@ _num_to_bid: dict = {}
 ws_generation: dict = {}
 ws_reconnect_attempts: dict = {}   # contador de reintentos por bookmaker
 ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zombies)
-_save_event = threading.Event()    # v8.6: thread-safe flag para guardar crashes en batch
+ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
+_save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
 
 def _load_config():
@@ -527,6 +529,10 @@ def _start_ws(bm_id):
         try: zombie.close()
         except: pass
 
+    # v8.8: pausa 2s para que el servidor registre el cierre antes del nuevo login
+    # Sin esto, la reconexión proactiva puede provocar ec=28 (sesión duplicada transitoria)
+    time.sleep(2)
+
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
     msg3 = _b64_to_bytes(bm.get("msg3_b64", ""))
@@ -561,6 +567,7 @@ def _start_ws(bm_id):
         log.info("[%s] ✓ CONNECTED gen=%d", name, gen)
         connection_status[bm_id] = "connected"
         ws_reconnect_attempts[bm_id] = 0
+        ws_login_retries[bm_id] = 0       # v8.8: reset reintentos de login al conectar
         auth_state["step"] = "wait_handshake_resp"
         send_msg(ws, msg1, 1, "Handshake")
 
@@ -653,15 +660,35 @@ def _start_ws(bm_id):
                 log.info("[%s] SERVER DISCONNECT dr=%s — cierre normal, reconectará.", name, dr)
             return
 
-        # ── v8.2: LOGIN RECHAZADO — detener reconexión, marcar error ──
+        # ── v8.2/v8.8: LOGIN RECHAZADO ──
         elif ftype == "login_error":
             ec = parsed.get("p", {}).get("ec", "?") if parsed else "?"
-            log.error("[%s] ✗ LOGIN RECHAZADO por servidor (ec=%s) — "
-                      "token expirado / sesión duplicada / ban. "
-                      "Actualiza msg2_b64 en el admin.", name, ec)
-            connection_status[bm_id] = "error"
-            ws_generation[bm_id] = gen + 1   # cancela reconexión automática
-            ws.close()
+            retries = ws_login_retries.get(bm_id, 0)
+            # Reintentar hasta 3 veces — ec=28 puede ser duplicado transitorio (no ban real)
+            # Backoff: intento 1→5s, 2→15s, 3→60s, 4+→error permanente
+            if retries < 3:
+                delays = [5, 15, 60]
+                delay = delays[retries]
+                ws_login_retries[bm_id] = retries + 1
+                log.warning("[%s] ✗ LOGIN ec=%s (intento %d/3) — reintentando en %ds "
+                            "(puede ser sesión duplicada transitoria)",
+                            name, ec, retries + 1, delay)
+                ws_generation[bm_id] = gen + 1  # cancela este gen
+                ws.close()
+                def _retry_login():
+                    time.sleep(delay)
+                    if bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
+                       connection_status.get(bm_id) != "error":
+                        _start_ws(bm_id)
+                threading.Thread(target=_retry_login, daemon=True).start()
+            else:
+                # 3 intentos fallidos → ban real o token expirado
+                ws_login_retries[bm_id] = 0
+                log.error("[%s] ✗ LOGIN RECHAZADO definitivo (ec=%s) tras 3 intentos — "
+                          "token expirado / ban real. Actualiza msg2_b64 en el admin.", name, ec)
+                connection_status[bm_id] = "error"
+                ws_generation[bm_id] = gen + 1
+                ws.close()
             return
 
         # ── v8.4: LOGIN EXITOSO (c=0,a=1,rs=0) → avanzar auth inmediatamente ──
