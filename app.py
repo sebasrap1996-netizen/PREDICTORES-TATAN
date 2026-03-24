@@ -1,11 +1,12 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.2 — Fix reconexión infinita:
-  1. classify_frame: detecta login_error (ec != 0) para no reconectar con credenciales malas
-  2. on_message: maneja login_error deteniendo reconexión automática
-  3. on_close: backoff exponencial (15→30→60→120→300s) para evitar hammering
+v8.3 — Fix reconnecting loop por sfs_c0_a1005 (server kick):
+  1. classify_frame: detecta server_disconnect (a=1005, dr) y login_error (ec!=0)
+  2. on_message: al recibir server_disconnect cancela reconexión del gen activo
+  3. on_close: backoff exponencial + respeta error/server_kicked
   4. ws_reconnect_attempts: contador global de reintentos por bookmaker
-  5. send_msg en hilos separados: no bloquea el hilo WS con time.sleep
+  5. send_delayed: no bloquea el hilo WS con time.sleep
+  6. Zombie cleanup: cierra todas las conexiones viejas al iniciar nueva gen
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -56,7 +57,8 @@ MAX_DBG      = 200
 _bm_counter: int = 0
 _num_to_bid: dict = {}
 ws_generation: dict = {}
-ws_reconnect_attempts: dict = {}   # ← v8.2: contador de reintentos por bookmaker
+ws_reconnect_attempts: dict = {}   # contador de reintentos por bookmaker
+ws_all_connections: dict = {}      # v8.3: lista de TODAS las ws vivas (para matar zombies)
 _save_lock = threading.Lock()
 
 def _load_config():
@@ -281,6 +283,11 @@ def classify_frame(obj):
             return ("login_error", False)
         return ("login_req", False)
     if c == 1 and a == 0: return ("login_resp", False)
+    # v8.3: SFS2X server-initiated disconnect (a=1005, p={dr:X})
+    # dr=1 = sesión kickeada por login duplicado, dr=2 = ban, etc.
+    if a == 1005:
+        dr = p.get("dr", "?") if isinstance(p, dict) else "?"
+        return (f"server_disconnect:dr{dr}", False)
     if c == 4: return ("room_join", False)
     if a == 13:
         if isinstance(p, dict):
@@ -507,9 +514,13 @@ def _start_ws(bm_id):
     gen = ws_generation.get(bm_id, 0) + 1
     ws_generation[bm_id] = gen
 
+    # v8.3: matar TODOS los zombies previos (no solo el último guardado)
     old = ws_connections.pop(bm_id, None)
     if old:
         try: old.close()
+        except: pass
+    for zombie in ws_all_connections.pop(bm_id, []):
+        try: zombie.close()
         except: pass
 
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
@@ -586,6 +597,18 @@ def _start_ws(bm_id):
             auth_state["step"] = "wait_login_resp"
             send_delayed(ws, msg2, 2, "Login")
 
+        # ── v8.3: SERVER DISCONNECT (sfs_c0_a1005 / dr=X) ──
+        # El servidor kickea esta sesión (sesión duplicada, timeout, etc.)
+        # No reconectar el gen activo — ya hay una nueva conexión más nueva
+        elif "server_disconnect" in ftype:
+            dr = parsed.get("p", {}).get("dr", "?") if parsed else "?"
+            log.warning("[%s] ⚡ SERVER DISCONNECT gen=%d dr=%s — "
+                        "el servidor cerró esta sesión (duplicado/kick). "
+                        "Cancelando reconexión de este gen.", name, gen, dr)
+            # Avanzar generación para que on_close no reconecte
+            ws_generation[bm_id] = gen + 1
+            return
+
         # ── v8.2: LOGIN RECHAZADO — detener reconexión, marcar error ──
         elif ftype == "login_error":
             ec = parsed.get("p", {}).get("ec", "?") if parsed else "?"
@@ -659,6 +682,11 @@ def _start_ws(bm_id):
         total_recv = stats["recv_bin"] + stats["recv_txt"]
         log.info("[%s] CLOSED gen=%d code=%s | sent=%d recv=%d",
                  name, gen, code, stats["sent"], total_recv)
+        # v8.3: limpiar de la lista de zombies
+        try:
+            lst = ws_all_connections.get(bm_id, [])
+            if ws in lst: lst.remove(ws)
+        except: pass
         if ws_generation.get(bm_id) != gen:
             return
         # No reconectar si el login fue rechazado (credenciales malas)
@@ -724,6 +752,7 @@ def _start_ws(bm_id):
         header=headers,
     )
     ws_connections[bm_id] = ws_app
+    ws_all_connections.setdefault(bm_id, []).append(ws_app)   # v8.3: zombie tracking
     t = threading.Thread(
         target=ws_app.run_forever,
         # NO enviar pings WebSocket — SFS2X/Spribe no responde pongs
@@ -778,6 +807,10 @@ def _stop_ws(bm_id):
     ws = ws_connections.pop(bm_id, None)
     if ws:
         try: ws.close()
+        except: pass
+    # v8.3: matar zombies también
+    for zombie in ws_all_connections.pop(bm_id, []):
+        try: zombie.close()
         except: pass
     ws_threads.pop(bm_id, None)
     connection_status[bm_id] = "disconnected"
