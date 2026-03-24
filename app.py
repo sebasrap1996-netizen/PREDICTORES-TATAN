@@ -521,8 +521,9 @@ def _start_ws(bm_id):
         # ── TEXT frames ──
         if isinstance(message, str):
             stats["recv_txt"] += 1
-            log.info("[%s] ← TXT #%d (%d chars): %s",
-                     name, stats["recv_txt"], len(message), message[:500])
+            if stats["recv_txt"] <= 3 or stats["recv_txt"] % 100 == 0:
+                log.info("[%s] ← TXT #%d (%d chars): %s",
+                         name, stats["recv_txt"], len(message), message[:300])
             mults = process_text(message, bm_id, name)
             for m in mults:
                 _record_crash(bm_id, name, m)
@@ -530,8 +531,9 @@ def _start_ws(bm_id):
 
         # ── BINARY frames ──
         stats["recv_bin"] += 1
-        log.info("[%s] ← BIN #%d (%d bytes): %s",
-                 name, stats["recv_bin"], len(message), message[:80].hex())
+        if stats["recv_bin"] <= 3 or stats["recv_bin"] % 100 == 0:
+            log.info("[%s] ← BIN #%d (%d bytes): %s",
+                     name, stats["recv_bin"], len(message), message[:60].hex())
 
         parsed, method = _try_sfs_decode(message)
         ftype = "unknown"
@@ -617,16 +619,25 @@ def _start_ws(bm_id):
                  name, gen, code, stats["sent"], stats["recv_bin"], stats["recv_txt"])
         if ws_generation.get(bm_id) != gen:
             return
-        # SIEMPRE reconectar si bookmaker activo
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
-            delay = 3 if (stats["recv_bin"] + stats["recv_txt"]) > 0 else 8
+            # Backoff: si no recibió nada → 10s, si recibió poco → 5s, si iba bien → 5s
+            total_recv = stats["recv_bin"] + stats["recv_txt"]
+            if total_recv == 0:
+                delay = 10  # Nunca conectó bien — esperar más
+            else:
+                delay = 5   # Estaba funcionando — reconectar normal
+            # NO cambiar a "reconnecting" si va a reconectar rápido —
+            # mantener "connected" para que la UI no parpadee
             connection_status[bm_id] = "reconnecting"
-            log.info("[%s] Reconnecting in %ds...", name, delay)
+            log.info("[%s] Reconnect in %ds (received %d frames)...", name, delay, total_recv)
             def _reconn():
                 time.sleep(delay)
                 if ws_generation.get(bm_id) == gen and \
                    bm_id in bookmakers and bookmakers[bm_id].get("active", False):
                     _start_ws(bm_id)
+                else:
+                    # Si gen cambió, alguien más ya reconectó — no hacer nada
+                    pass
             threading.Thread(target=_reconn, daemon=True).start()
         else:
             connection_status[bm_id] = "disconnected"
@@ -661,7 +672,7 @@ def _start_ws(bm_id):
     ws_connections[bm_id] = ws_app
     t = threading.Thread(
         target=ws_app.run_forever,
-        kwargs={"ping_interval": 25, "ping_timeout": 15, "sslopt": ssl_opts},
+        kwargs={"ping_interval": 30, "ping_timeout": 25, "sslopt": ssl_opts},
         daemon=True,
     )
     t.start()
@@ -877,18 +888,22 @@ def _autostart():
 threading.Thread(target=_autostart, daemon=True).start()
 
 def _watchdog():
-    time.sleep(20)
+    """Safety net: solo reconecta bookmakers que llevan >45s sin conexión activa."""
+    time.sleep(30)
     while True:
         try:
             for bid, bm in list(bookmakers.items()):
                 if not bm.get("active", False): continue
                 status = connection_status.get(bid, "disconnected")
+                # Solo actuar si está completamente muerto — NO tocar "reconnecting"
+                # porque on_close ya está manejando la reconexión
                 if status in ("error", "disconnected"):
-                    log.info("[watchdog] %s → reconnecting", bm.get("name", bid))
-                    _start_ws(bid); time.sleep(3)
+                    log.info("[watchdog] %s status='%s' — reconnecting", bm.get("name", bid), status)
+                    _start_ws(bid)
+                    time.sleep(5)
         except Exception as e:
             log.error("[watchdog] %s", e)
-        time.sleep(30)
+        time.sleep(45)
 threading.Thread(target=_watchdog, daemon=True).start()
 
 def _periodic_save():
