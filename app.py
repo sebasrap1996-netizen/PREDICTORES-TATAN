@@ -1,13 +1,13 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.9.2 — Fix bookmaker queda en "connecting" tras ec=28:
-  - El contador de reintentos de login ahora vive en auth_state (por generación)
-    en vez de ws_login_retries global (por bookmaker)
-  → Cada nueva gen arranca con login_retries=0, sin heredar fallos de gens anteriores
-  → Elimina el bug donde reconexiones proactivas acumulaban el contador hasta
-    marcar "error" permanente tras 3 gens distintas
-  Incluye fixes v8.9 (race condition reconexión proactiva)
-  Incluye fixes v8.9.1 (connecting en arranque de Render)
+v8.9 — Fix pausa de crashes en vivo (race condition en reconexión proactiva):
+  1. _start_ws acepta _delay=N: si N>0 lanza un hilo y retorna inmediatamente
+     → ningún caller queda bloqueado por time.sleep(2) del antiguo v8.8
+  2. _proactive_reconnect usa _start_ws(bm_id, _delay=2) en vez de llamar
+     directamente — elimina la ventana donde old gen y new gen coexistían
+  3. on_close loguea con DEBUG cuando ignora un cierre de gen antiguo
+     (facilita diagnóstico futuro)
+  4. Mantiene todos los fixes v8.8 (ec=28 retry backoff, etc.)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -512,7 +512,15 @@ def _b64_to_bytes(s):
     except: return b""
 
 
-def _start_ws(bm_id):
+def _start_ws(bm_id, _delay=0):
+    """Arranca WebSocket para bm_id. Si _delay>0 espera en hilo separado (no bloquea)."""
+    if _delay > 0:
+        def _deferred():
+            time.sleep(_delay)
+            _start_ws(bm_id, _delay=0)
+        threading.Thread(target=_deferred, daemon=True).start()
+        return
+
     bm = bookmakers.get(bm_id)
     if not bm: return
     ws_url = bm.get("ws_url", "").strip()
@@ -531,10 +539,6 @@ def _start_ws(bm_id):
         try: zombie.close()
         except: pass
 
-    # v8.8: pausa 2s para que el servidor registre el cierre antes del nuevo login
-    # Sin esto, la reconexión proactiva puede provocar ec=28 (sesión duplicada transitoria)
-    time.sleep(2)
-
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
     msg3 = _b64_to_bytes(bm.get("msg3_b64", ""))
@@ -545,8 +549,7 @@ def _start_ws(bm_id):
     log.info("[%s] ═══ CONNECTING gen=%d to %s ═══", name, gen, ws_url)
 
     auth_state = {"step": "wait_connect", "handshake_done": False,
-                  "login_done": False, "msg3_sent": False,
-                  "login_retries": 0}   # v8.9.2: contador por gen, no global
+                  "login_done": False, "msg3_sent": False}
     stats = {"sent": 0, "recv_bin": 0, "recv_txt": 0}
     last_frame_time = [time.time()]   # v8.6: tracker de último frame recibido
 
@@ -570,7 +573,7 @@ def _start_ws(bm_id):
         log.info("[%s] ✓ CONNECTED gen=%d", name, gen)
         connection_status[bm_id] = "connected"
         ws_reconnect_attempts[bm_id] = 0
-        # v8.9.2: login_retries ahora vive en auth_state (por gen) — no necesita reset global aquí
+        ws_login_retries[bm_id] = 0       # v8.8: reset reintentos de login al conectar
         auth_state["step"] = "wait_handshake_resp"
         send_msg(ws, msg1, 1, "Handshake")
 
@@ -596,8 +599,7 @@ def _start_ws(bm_id):
                bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
                connection_status.get(bm_id) != "error":
                 log.info("[%s] ↺ Reconexión proactiva (120s) — evitando timeout Spribe", name)
-                _start_ws(bm_id)   # incrementa gen, arranca nueva conexión
-                # La vieja conexión cierra sola a los ~150s (server-side) sin disparar reconexión
+                _start_ws(bm_id, _delay=2)   # v8.9: delay=2 no bloquea el hilo actual
         threading.Thread(target=_proactive_reconnect, daemon=True).start()
 
     def on_message(ws, message):
@@ -663,18 +665,18 @@ def _start_ws(bm_id):
                 log.info("[%s] SERVER DISCONNECT dr=%s — cierre normal, reconectará.", name, dr)
             return
 
-        # ── v8.9.2: LOGIN RECHAZADO — contador por generación (auth_state local) ──
+        # ── v8.2/v8.8: LOGIN RECHAZADO ──
         elif ftype == "login_error":
             ec = parsed.get("p", {}).get("ec", "?") if parsed else "?"
-            retries = auth_state["login_retries"]
-            # ec=28 = sesión duplicada transitoria — reintentar hasta 3 veces con backoff
-            # El contador es por generación: cada nueva gen arranca desde 0
+            retries = ws_login_retries.get(bm_id, 0)
+            # Reintentar hasta 3 veces — ec=28 puede ser duplicado transitorio (no ban real)
             # Backoff: intento 1→5s, 2→15s, 3→60s, 4+→error permanente
             if retries < 3:
                 delays = [5, 15, 60]
                 delay = delays[retries]
-                auth_state["login_retries"] += 1
-                log.warning("[%s] ✗ LOGIN ec=%s (intento %d/3 de esta gen) — reintentando en %ds",
+                ws_login_retries[bm_id] = retries + 1
+                log.warning("[%s] ✗ LOGIN ec=%s (intento %d/3) — reintentando en %ds "
+                            "(puede ser sesión duplicada transitoria)",
                             name, ec, retries + 1, delay)
                 ws_generation[bm_id] = gen + 1  # cancela este gen
                 ws.close()
@@ -685,7 +687,8 @@ def _start_ws(bm_id):
                         _start_ws(bm_id)
                 threading.Thread(target=_retry_login, daemon=True).start()
             else:
-                # 3 intentos fallidos en esta misma gen → ban real o token expirado
+                # 3 intentos fallidos → ban real o token expirado
+                ws_login_retries[bm_id] = 0
                 log.error("[%s] ✗ LOGIN RECHAZADO definitivo (ec=%s) tras 3 intentos — "
                           "token expirado / ban real. Actualiza msg2_b64 en el admin.", name, ec)
                 connection_status[bm_id] = "error"
@@ -790,6 +793,8 @@ def _start_ws(bm_id):
             if ws in lst: lst.remove(ws)
         except: pass
         if ws_generation.get(bm_id) != gen:
+            log.debug("[%s] on_close gen=%d ignorado — gen actual=%d (nueva conexión ya activa)",
+                      name, gen, ws_generation.get(bm_id, -1))
             return
         # No reconectar si el login fue rechazado (credenciales malas)
         if connection_status.get(bm_id) == "error":
@@ -822,7 +827,7 @@ def _start_ws(bm_id):
                 if ws_generation.get(bm_id) == gen and \
                    bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
                    connection_status.get(bm_id) != "error":
-                    _start_ws(bm_id)
+                    _start_ws(bm_id)   # sin _delay extra — ya esperamos arriba
             threading.Thread(target=_reconn, daemon=True).start()
         else:
             connection_status[bm_id] = "disconnected"
