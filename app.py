@@ -1,12 +1,10 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.9 — Fix ec=28 en 1win (sesión duplicada al reconectar):
-  1. login_error: eliminado ws_generation[bm_id] = gen + 1 antes de _start_ws
-     → _start_ws ya incrementa el gen internamente; hacerlo dos veces dejaba
-       la conexión vieja "huérfana" sin cerrar limpiamente, generando ec=28
-  2. _start_ws: pausa pre-login aumentada de 2s a 5s
-     → 1win tarda más que Spribe en registrar el cierre de sesión en el servidor
-  Mantiene todos los fixes v8.8 (reintentos login, reconexión proactiva 120s, etc.)
+v8.10 — Fix ec=28 perpetuo en 1win:
+  on_close ahora omite reconexión si status=="connecting" (login falló).
+  Antes: login_error programaba _retry_login Y on_close programaba _reconn
+  simultáneamente → dos conexiones paralelas → ec=28 infinito.
+  Mantiene todos los fixes v8.9.
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -796,6 +794,12 @@ def _start_ws(bm_id):
         if connection_status.get(bm_id) == "error":
             log.warning("[%s] ⛔ No reconectando — login rechazado. "
                         "Actualiza las credenciales (msg2_b64) en el admin.", name)
+            return
+        # v8.9: No reconectar si aún estamos en "connecting" — significa que
+        # login_error ya programó un _retry_login. Si on_close también reconecta,
+        # se generan dos conexiones paralelas que provocan ec=28 perpetuo.
+        if connection_status.get(bm_id) == "connecting":
+            log.info("[%s] on_close: status=connecting — reintento ya programado por login_error, omitiendo reconexión.", name)
             return
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
             # ── v8.2: Backoff exponencial según intentos fallidos ──
