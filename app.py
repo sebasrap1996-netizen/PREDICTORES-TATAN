@@ -1,11 +1,11 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.4 — Fix crashes perdidos en vivo:
-  1. classify_frame: handshake_resp ANTES que handshake_req (mismo c=0,a=0)
-  2. classify_frame: login_resp_ok para c=0,a=1,rs=0 (respuesta exitosa de login)
-  3. on_message: captura roundsInfo del frame init (crashes durante reconexión)
-  4. on_message: auth avanza correctamente en login_resp_ok
-  5. Mantiene todos los fixes v8.3 (server_disconnect, backoff, zombie cleanup)
+v8.5 — Fix pauses periódicas y reconnecting cada X minutos:
+  1. SFS2X Ping/Pong: responde al frame c=7 del servidor (keepalive)
+     → sin esto el servidor desconecta cada ~60s → pause de 8s → reconnecting
+  2. Fix thread leak: _record_crash ya no spawna thread por cada crash
+     → usa flag _save_pending + _periodic_save para guardar en batch
+  3. Mantiene todos los fixes v8.4 (server_disconnect dr, backoff, zombie, init recovery)
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -57,7 +57,8 @@ _bm_counter: int = 0
 _num_to_bid: dict = {}
 ws_generation: dict = {}
 ws_reconnect_attempts: dict = {}   # contador de reintentos por bookmaker
-ws_all_connections: dict = {}      # v8.3: lista de TODAS las ws vivas (para matar zombies)
+ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zombies)
+_save_pending = False              # v8.5: flag para guardar crashes en batch (evita thread leak)
 _save_lock = threading.Lock()
 
 def _load_config():
@@ -593,6 +594,16 @@ def _start_ws(bm_id):
             log.info("[%s] Frame: %s (game=%s) decoded=%s",
                      name, ftype, is_game, _sj(parsed)[:600])
 
+        # ── v8.5: SFS2X Keepalive — responder ping del servidor con el mismo frame ──
+        # El servidor envía c=7 cada ~60s. Sin pong → timeout → CLOSED → reconnecting
+        if ftype == "ping":
+            try:
+                ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
+                log.debug("[%s] ↩ PONG (keepalive)", name)
+            except Exception as e:
+                log.warning("[%s] Pong send failed: %s", name, e)
+            return  # nada más que hacer con este frame
+
         # ── Auth state machine ──
         step = auth_state["step"]
 
@@ -834,7 +845,9 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
         except: pass
     log.info("[%s] ★★★ CRASH: %.2fx round=%s total=%d ★★★",
              bm_name, mult, round_id, len(crashes[bm_id]))
-    threading.Thread(target=_save_crashes, daemon=True).start()
+    # v8.5: marcar pendiente en vez de crear un thread por cada crash (evita thread leak)
+    global _save_pending
+    _save_pending = True
 
 
 def _stop_ws(bm_id):
@@ -1035,13 +1048,15 @@ def _watchdog():
 threading.Thread(target=_watchdog, daemon=True).start()
 
 def _periodic_save():
-    time.sleep(60)
+    global _save_pending
+    time.sleep(30)
     while True:
         try:
-            total = sum(len(v) for v in crashes.values())
-            if total > 0: _save_crashes()
+            if _save_pending:
+                _save_crashes()
+                _save_pending = False
         except: pass
-        time.sleep(60)
+        time.sleep(15)  # v8.5: cada 15s si hay cambios (antes 60s fijo)
 threading.Thread(target=_periodic_save, daemon=True).start()
 
 if __name__ == "__main__":
