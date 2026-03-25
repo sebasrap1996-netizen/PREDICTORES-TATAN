@@ -1,10 +1,10 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.10 — Fix ec=28 perpetuo en 1win:
-  on_close ahora omite reconexión si status=="connecting" (login falló).
-  Antes: login_error programaba _retry_login Y on_close programaba _reconn
-  simultáneamente → dos conexiones paralelas → ec=28 infinito.
-  Mantiene todos los fixes v8.9.
+v8.11 — Fix congelamiento de crashes en vivo para 1win:
+  Reconexión proactiva de 120s deshabilitada para spribegaming64.click (1win).
+  En 1win esa reconexión creaba sesión duplicada → server_disconnect:dr1 cada ~65s
+  → gap sin datos. Solo se activa para spribegaming.com que tiene timeout real de 150s.
+  Mantiene todos los fixes v8.10.
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -585,16 +585,19 @@ def _start_ws(bm_id):
         threading.Thread(target=_silence_watchdog, daemon=True).start()
 
         # v8.7: reconexión PROACTIVA a los 120s para evitar hard timeout Spribe (150s)
-        # La nueva conexión se establece ANTES de que el servidor cierre la vieja
-        # → elimina el gap visible de "reconnecting" cada 2m30s
+        # v8.11: solo para spribegaming.com — 1win usa spribegaming64.click que NO tiene
+        # timeout de 150s. En 1win la reconexión proactiva genera sesión duplicada → dr=1
+        # → gap de ~65s sin datos. Se desactiva detectando el dominio del ws_url.
+        _is_spribe_timeout = "spribegaming.com" in ws_url and "spribegaming64" not in ws_url
         def _proactive_reconnect():
             time.sleep(120)
+            if not _is_spribe_timeout:
+                return  # 1win u otro servidor sin timeout 150s — no reconectar proactivamente
             if ws_generation.get(bm_id) == gen and \
                bm_id in bookmakers and bookmakers[bm_id].get("active", False) and \
                connection_status.get(bm_id) != "error":
                 log.info("[%s] ↺ Reconexión proactiva (120s) — evitando timeout Spribe", name)
-                _start_ws(bm_id)   # incrementa gen, arranca nueva conexión
-                # La vieja conexión cierra sola a los ~150s (server-side) sin disparar reconexión
+                _start_ws(bm_id)
         threading.Thread(target=_proactive_reconnect, daemon=True).start()
 
     def on_message(ws, message):
