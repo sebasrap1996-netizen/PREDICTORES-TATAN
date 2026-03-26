@@ -60,7 +60,6 @@ ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zom
 ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
 _save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
-_crashes_lock = threading.Lock()   # v8.12: evita duplicados por race condition entre hilos WS
 
 def _load_config():
     """Carga bookmakers + crashes del disco."""
@@ -734,14 +733,24 @@ def _start_ws(bm_id):
                 for m in mults:
                     _record_crash(bm_id, name, m, rid)
 
-        # ── v8.4: Frame init — recuperar crashes perdidos durante reconexión ──
+        # ── v8.4: Frame init — recuperar crashes perdidos durante reconexion ──
         elif "init" in ftype and parsed:
             inner_p = parsed.get("p", {}).get("p", {}) if isinstance(parsed.get("p"), dict) else {}
             rounds_info = inner_p.get("roundsInfo", []) if isinstance(inner_p, dict) else []
             if rounds_info:
                 bm_crashes_list = crashes.get(bm_id, [])
                 known_ids = {cr.get("round_id") for cr in bm_crashes_list if cr.get("round_id")}
-                # Ordenar por roundId asc para preservar orden cronológico
+                # v8.12: indice FIFO de entradas sin round_id agrupadas por multiplicador.
+                # Sirve para upgradar en lugar de duplicar los crashes que el WS
+                # registro en vivo sin round_id (protocolo sin roundId en frames live).
+                _no_rid_by_mult = {}
+                for _e in bm_crashes_list:
+                    if _e.get("round_id") is None:
+                        _m = round(float(_e.get("multiplier", 0)), 2)
+                        if _m not in _no_rid_by_mult:
+                            _no_rid_by_mult[_m] = []
+                        _no_rid_by_mult[_m].append(_e)
+                # Ordenar por roundId asc para preservar orden cronologico
                 sorted_rounds = sorted(
                     [r for r in rounds_info if isinstance(r, dict)],
                     key=lambda x: x.get("roundId", 0)
@@ -750,12 +759,23 @@ def _start_ws(bm_id):
                 for r in sorted_rounds:
                     rid  = r.get("roundId")
                     mult = _parse_mult(r.get("maxMultiplier"))
-                    if mult and rid and rid not in known_ids:
+                    if not mult or not rid or rid in known_ids:
+                        continue
+                    mult_r = round(mult, 2)
+                    candidates = _no_rid_by_mult.get(mult_r, [])
+                    if candidates:
+                        # Upgradar la entrada mas antigua sin round_id (FIFO)
+                        # en lugar de crear un duplicado
+                        oldest = candidates.pop(0)
+                        oldest["round_id"] = rid
+                        known_ids.add(rid)
+                        log.debug("[%s] init: upgraded mult=%.2f round_id=%s", name, mult_r, rid)
+                    else:
                         _record_crash(bm_id, name, mult, rid)
                         known_ids.add(rid)
                         recovered += 1
                 if recovered:
-                    log.info("[%s] ↺ Recuperados %d crashes perdidos del frame init", name, recovered)
+                    log.info("[%s] Recuperados %d crashes perdidos del frame init", name, recovered)
 
         # ── Post-auth: captura normal ──
         elif auth_state["step"] == "authenticated" and is_game:
@@ -881,41 +901,38 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     """Registra crash con dedup, preservando orden cronológico."""
     now = datetime.now(timezone.utc)
     mult = round(float(multiplier), 2)
+    bm_crashes = crashes[bm_id]
 
-    # v8.12: lock global para que dos hilos WS no pasen el dedup simultáneamente
-    with _crashes_lock:
-        bm_crashes = crashes[bm_id]
-
-        if round_id is not None:
-            for prev in reversed(bm_crashes[-50:]):
-                if prev.get("round_id") == round_id: return
-        if round_id is not None:
-            for prev in reversed(bm_crashes[-5:]):
-                try:
-                    age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
-                    if age > 15: break
-                    if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
-                        prev["round_id"] = round_id; return
-                except: pass
-        for prev in reversed(bm_crashes[-10:]):
+    if round_id is not None:
+        for prev in reversed(bm_crashes[-50:]):
+            if prev.get("round_id") == round_id: return
+    if round_id is not None:
+        for prev in reversed(bm_crashes[-5:]):
             try:
                 age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
                 if age > 15: break
-                if round(float(prev["multiplier"]), 2) == mult: return
+                if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
+                    prev["round_id"] = round_id; return
             except: pass
+    for prev in reversed(bm_crashes[-10:]):
+        try:
+            age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
+            if age > 15: break
+            if round(float(prev["multiplier"]), 2) == mult: return
+        except: pass
 
-        entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
-        if round_id is not None: entry["round_id"] = round_id
-        bm_crashes.append(entry)
-        if len(bm_crashes) > MAX_CRASHES:
-            crashes[bm_id] = bm_crashes[-MAX_CRASHES:]
-        for q in sse_subscribers.get(bm_id, []):
-            try: q.put_nowait(entry)
-            except: pass
-        log.info("[%s] ★★★ CRASH: %.2fx round=%s total=%d ★★★",
-                 bm_name, mult, round_id, len(crashes[bm_id]))
-        # v8.5/v8.6: marcar pendiente (thread-safe Event) en vez de thread por crash
-        _save_event.set()
+    entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
+    if round_id is not None: entry["round_id"] = round_id
+    bm_crashes.append(entry)
+    if len(bm_crashes) > MAX_CRASHES:
+        crashes[bm_id] = bm_crashes[-MAX_CRASHES:]
+    for q in sse_subscribers.get(bm_id, []):
+        try: q.put_nowait(entry)
+        except: pass
+    log.info("[%s] ★★★ CRASH: %.2fx round=%s total=%d ★★★",
+             bm_name, mult, round_id, len(crashes[bm_id]))
+    # v8.5/v8.6: marcar pendiente (thread-safe Event) en vez de thread por crash
+    _save_event.set()
 
 
 def _stop_ws(bm_id):
