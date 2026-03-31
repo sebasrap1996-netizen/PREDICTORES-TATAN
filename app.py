@@ -1,15 +1,10 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.14 — Triple fix de duplicación de crashes en vivo (RUSHBET/BETPLAY):
-  A) maxMultiplier añadido a X100_INT_KEYS: frames vivos y roundChartInfo
-     tenían mismatch (odd:157→1.57x vivo vs maxMultiplier:157→157.0x en scan)
-     → el upgrade del init fallaba y se insertaba un crash extra a 157.0x.
-  B) extract_game_mults deduplicado antes de return: si el mismo mult aparece
-     en inner_p.odd Y inner_p.result.odd → antes se llamaba _record_crash 2x.
-  C) roundChartInfo movido a STATE_COMMANDS: Spribe lo envía ~20-30s después
-     del crash real (fuera de la ventana de 15s del dedup por tiempo) → causaba
-     segundo registro del mismo crash. El crash real ya llega en frame "F"/"R".
-  También incluye fix v8.13 (_record_lock para race condition concurrente).
+v8.11 — Fix congelamiento de crashes en vivo para 1win:
+  Reconexión proactiva de 120s deshabilitada para spribegaming64.click (1win).
+  En 1win esa reconexión creaba sesión duplicada → server_disconnect:dr1 cada ~65s
+  → gap sin datos. Solo se activa para spribegaming.com que tiene timeout real de 150s.
+  Mantiene todos los fixes v8.10.
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -65,7 +60,6 @@ ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zom
 ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
 _save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
-_record_lock = threading.Lock()    # v8.13: evita race condition en _record_crash (dedup + append)
 
 def _load_config():
     """Carga bookmakers + crashes del disco."""
@@ -250,9 +244,7 @@ GAME_COMMANDS = {
     "crash",
     "roundEnd", "roundend",
     "gameend", "gameEnd",
-    # roundChartInfo movido a STATE_COMMANDS (v8.14): Spribe lo envía ~20-30s
-    # después del frame de crash real ("F"/"R") — causaba duplicados al caer
-    # fuera de la ventana de 15s del dedup por tiempo.
+    "roundChartInfo",
 }
 
 TICK_COMMANDS = {
@@ -274,9 +266,6 @@ STATE_COMMANDS = {
     "changeState",
     # Spribe: historial al conectar — NO registrar como crashes en vivo
     "init",
-    # v8.14: resumen post-ronda — Spribe lo envía ~20-30s después del crash real
-    # El crash ya fue registrado por el frame "F"/"R". Evita duplicado tardío.
-    "roundChartInfo",
 }
 
 
@@ -354,8 +343,6 @@ def extract_game_mults(obj, label=""):
                 if isinstance(item, dict): results.extend(_scan_game_obj(item, label, cmd))
     if not results: results.extend(_scan_game_obj(p, label, cmd))
     if not results: results.extend(_scan_game_obj(obj, label, cmd))
-    # v8.14: dedup interno — el mismo mult puede aparecer en inner_p.odd Y inner_p.result.odd
-    seen_m = set(); results = [m for m in results if not (m in seen_m or seen_m.add(m))]
     return results, round_id
 
 
@@ -375,8 +362,7 @@ def _scan_game_obj(obj, label="", cmd="", depth=0):
         if key in GAME_KEYS:
             X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
                              "crashValue", "endK", "crashMultiplier",
-                             "finalMultiplier", "coefficient",
-                             "maxMultiplier"}   # v8.14: Spribe guarda maxMultiplier como x100 int
+                             "finalMultiplier", "coefficient"}
             if key in X100_INT_KEYS and isinstance(val, int):
                 if val < 100: continue
                 parsed_val = round(val / 100.0, 2)
@@ -747,24 +733,14 @@ def _start_ws(bm_id):
                 for m in mults:
                     _record_crash(bm_id, name, m, rid)
 
-        # ── v8.4: Frame init — recuperar crashes perdidos durante reconexion ──
+        # ── v8.4: Frame init — recuperar crashes perdidos durante reconexión ──
         elif "init" in ftype and parsed:
             inner_p = parsed.get("p", {}).get("p", {}) if isinstance(parsed.get("p"), dict) else {}
             rounds_info = inner_p.get("roundsInfo", []) if isinstance(inner_p, dict) else []
             if rounds_info:
                 bm_crashes_list = crashes.get(bm_id, [])
                 known_ids = {cr.get("round_id") for cr in bm_crashes_list if cr.get("round_id")}
-                # v8.12: indice FIFO de entradas sin round_id agrupadas por multiplicador.
-                # Sirve para upgradar en lugar de duplicar los crashes que el WS
-                # registro en vivo sin round_id (protocolo sin roundId en frames live).
-                _no_rid_by_mult = {}
-                for _e in bm_crashes_list:
-                    if _e.get("round_id") is None:
-                        _m = round(float(_e.get("multiplier", 0)), 2)
-                        if _m not in _no_rid_by_mult:
-                            _no_rid_by_mult[_m] = []
-                        _no_rid_by_mult[_m].append(_e)
-                # Ordenar por roundId asc para preservar orden cronologico
+                # Ordenar por roundId asc para preservar orden cronológico
                 sorted_rounds = sorted(
                     [r for r in rounds_info if isinstance(r, dict)],
                     key=lambda x: x.get("roundId", 0)
@@ -772,29 +748,13 @@ def _start_ws(bm_id):
                 recovered = 0
                 for r in sorted_rounds:
                     rid  = r.get("roundId")
-                    # v8.14: maxMultiplier en roundsInfo es x100 int (igual que "odd" en frames vivos)
-                    # _parse_mult no convierte — hay que hacer la división aquí explícitamente
-                    _raw_mult = r.get("maxMultiplier")
-                    if isinstance(_raw_mult, int) and _raw_mult >= 100:
-                        _raw_mult = round(_raw_mult / 100.0, 2)
-                    mult = _parse_mult(_raw_mult)
-                    if not mult or not rid or rid in known_ids:
-                        continue
-                    mult_r = round(mult, 2)
-                    candidates = _no_rid_by_mult.get(mult_r, [])
-                    if candidates:
-                        # Upgradar la entrada mas antigua sin round_id (FIFO)
-                        # en lugar de crear un duplicado
-                        oldest = candidates.pop(0)
-                        oldest["round_id"] = rid
-                        known_ids.add(rid)
-                        log.debug("[%s] init: upgraded mult=%.2f round_id=%s", name, mult_r, rid)
-                    else:
+                    mult = _parse_mult(r.get("maxMultiplier"))
+                    if mult and rid and rid not in known_ids:
                         _record_crash(bm_id, name, mult, rid)
                         known_ids.add(rid)
                         recovered += 1
                 if recovered:
-                    log.info("[%s] Recuperados %d crashes perdidos del frame init", name, recovered)
+                    log.info("[%s] ↺ Recuperados %d crashes perdidos del frame init", name, recovered)
 
         # ── Post-auth: captura normal ──
         elif auth_state["step"] == "authenticated" and is_game:
@@ -917,38 +877,34 @@ def _start_ws(bm_id):
 
 
 def _record_crash(bm_id, bm_name, multiplier, round_id=None):
-    """Registra crash con dedup thread-safe, preservando orden cronológico.
-    v8.13: _record_lock protege check-then-append contra race conditions."""
+    """Registra crash con dedup, preservando orden cronológico."""
     now = datetime.now(timezone.utc)
     mult = round(float(multiplier), 2)
+    bm_crashes = crashes[bm_id]
 
-    with _record_lock:
-        bm_crashes = crashes[bm_id]
-
-        if round_id is not None:
-            for prev in reversed(bm_crashes[-50:]):
-                if prev.get("round_id") == round_id: return
-        if round_id is not None:
-            for prev in reversed(bm_crashes[-5:]):
-                try:
-                    age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
-                    if age > 15: break
-                    if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
-                        prev["round_id"] = round_id; return
-                except: pass
-        for prev in reversed(bm_crashes[-10:]):
+    if round_id is not None:
+        for prev in reversed(bm_crashes[-50:]):
+            if prev.get("round_id") == round_id: return
+    if round_id is not None:
+        for prev in reversed(bm_crashes[-5:]):
             try:
                 age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
                 if age > 15: break
-                if round(float(prev["multiplier"]), 2) == mult: return
+                if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
+                    prev["round_id"] = round_id; return
             except: pass
+    for prev in reversed(bm_crashes[-10:]):
+        try:
+            age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
+            if age > 15: break
+            if round(float(prev["multiplier"]), 2) == mult: return
+        except: pass
 
-        entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
-        if round_id is not None: entry["round_id"] = round_id
-        bm_crashes.append(entry)
-        if len(bm_crashes) > MAX_CRASHES:
-            crashes[bm_id] = bm_crashes[-MAX_CRASHES:]
-
+    entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
+    if round_id is not None: entry["round_id"] = round_id
+    bm_crashes.append(entry)
+    if len(bm_crashes) > MAX_CRASHES:
+        crashes[bm_id] = bm_crashes[-MAX_CRASHES:]
     for q in sse_subscribers.get(bm_id, []):
         try: q.put_nowait(entry)
         except: pass
