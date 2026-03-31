@@ -1,10 +1,15 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.11 — Fix congelamiento de crashes en vivo para 1win:
-  Reconexión proactiva de 120s deshabilitada para spribegaming64.click (1win).
-  En 1win esa reconexión creaba sesión duplicada → server_disconnect:dr1 cada ~65s
-  → gap sin datos. Solo se activa para spribegaming.com que tiene timeout real de 150s.
-  Mantiene todos los fixes v8.10.
+v8.12 — Fix crashes en vivo: saltos y duplicados
+  1. Dedup temporal reducida a 8s (era 15s) y SOLO cuando no hay round_id.
+     Con round_id el dedup exacto por ID ya es suficiente — la ventana de 15s
+     eliminaba silenciosamente rondas reales con mismo mult (ej: dos 2.00x seguidos).
+  2. Eliminado elif is_game final (frame-0 capture) que era dead code en la mayoría
+     de casos y causaba doble registro cuando auth_state cambiaba de step en el
+     mismo frame que contenía game data.
+  3. Inicializado mults=[] al inicio de on_message para evitar valor residual de
+     iteración anterior en el bloque de debug ('mults' in dir() era frágil).
+  Mantiene todos los fixes v8.11.
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -604,6 +609,7 @@ def _start_ws(bm_id):
         if ws_generation.get(bm_id) != gen:
             return
         last_frame_time[0] = time.time()   # v8.6: actualizar timestamp en cada frame
+        mults = []  # v8.12: siempre inicializar para evitar valor residual en debug
 
         # ── TEXT frames ──
         if isinstance(message, str):
@@ -762,11 +768,12 @@ def _start_ws(bm_id):
             for m in mults:
                 _record_crash(bm_id, name, m, rid)
 
-        # ── Frame 0 capture: si aún no estamos authenticated pero es game data ──
-        elif is_game and parsed:
-            mults, rid = extract_game_mults(parsed, name)
-            for m in mults:
-                _record_crash(bm_id, name, m, rid)
+        # ── Frame 0 capture: si aún no estamos authenticated pero es game data
+        #    y ninguno de los elif anteriores lo procesó ──
+        # NOTA: Este bloque NO debe activarse — los elif de auth ya manejan is_game.
+        # Se elimina para evitar doble registro. El último elif era dead code en la
+        # mayoría de casos y causaba duplicados cuando auth_state cambiaba de step
+        # dentro del mismo frame.
 
         _store_dbg(bm_id, {
             "time": datetime.now(timezone.utc).isoformat(),
@@ -776,7 +783,7 @@ def _start_ws(bm_id):
             "decoded": _sj(parsed)[:1500] if parsed else None,
             "method": f"sfs2x/{method}" if method else None,
             "frame_type": ftype,
-            "mults": [m for m in (mults if 'mults' in dir() and isinstance(mults, list) else [])],
+            "mults": mults if isinstance(mults, list) else [],
         })
 
     def on_error(ws, error):
@@ -882,23 +889,33 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     mult = round(float(multiplier), 2)
     bm_crashes = crashes[bm_id]
 
+    # Dedup por round_id: si ya tenemos esta ronda exacta, ignorar
     if round_id is not None:
         for prev in reversed(bm_crashes[-50:]):
-            if prev.get("round_id") == round_id: return
+            if prev.get("round_id") == round_id:
+                return
+
+    # Dedup por round_id + merge: si hay un crash reciente sin round_id con el mismo mult,
+    # asignarle el round_id en vez de duplicar (solo dentro de 15s)
     if round_id is not None:
         for prev in reversed(bm_crashes[-5:]):
             try:
                 age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
                 if age > 15: break
                 if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
-                    prev["round_id"] = round_id; return
+                    prev["round_id"] = round_id
+                    return
             except: pass
-    for prev in reversed(bm_crashes[-10:]):
-        try:
-            age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
-            if age > 15: break
-            if round(float(prev["multiplier"]), 2) == mult: return
-        except: pass
+
+    # Dedup temporal SOLO cuando no hay round_id (sin ID de ronda no podemos distinguir
+    # rondas con mismo mult → usamos ventana corta de 8s para no silenciar crasheos reales)
+    if round_id is None:
+        for prev in reversed(bm_crashes[-10:]):
+            try:
+                age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
+                if age > 8: break
+                if round(float(prev["multiplier"]), 2) == mult: return
+            except: pass
 
     entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
     if round_id is not None: entry["round_id"] = round_id
