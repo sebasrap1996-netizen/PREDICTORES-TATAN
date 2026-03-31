@@ -1,10 +1,11 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.11 — Fix congelamiento de crashes en vivo para 1win:
-  Reconexión proactiva de 120s deshabilitada para spribegaming64.click (1win).
-  En 1win esa reconexión creaba sesión duplicada → server_disconnect:dr1 cada ~65s
-  → gap sin datos. Solo se activa para spribegaming.com que tiene timeout real de 150s.
-  Mantiene todos los fixes v8.10.
+v8.13 — Fix race condition en _record_crash (dedup de crashes en vivo):
+  Añadido _record_lock (threading.Lock) que envuelve el check-then-append
+  en _record_crash. Sin él, dos frames del mismo bookmaker que llegaban en
+  paralelo (RUSHBET/BETPLAY envían el crash en múltiples frames) podían
+  ambos pasar el check de dedup antes de que cualquiera hubiera escrito,
+  insertando el mismo crash dos veces. Mantiene todos los fixes v8.12.
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -60,6 +61,7 @@ ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zom
 ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
 _save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
+_record_lock = threading.Lock()    # v8.13: evita race condition en _record_crash (dedup + append)
 
 def _load_config():
     """Carga bookmakers + crashes del disco."""
@@ -898,34 +900,39 @@ def _start_ws(bm_id):
 
 
 def _record_crash(bm_id, bm_name, multiplier, round_id=None):
-    """Registra crash con dedup, preservando orden cronológico."""
+    """Registra crash con dedup thread-safe, preservando orden cronológico.
+    v8.13: _record_lock protege el check-then-append contra race conditions
+    cuando múltiples frames del mismo bookmaker llegan en paralelo."""
     now = datetime.now(timezone.utc)
     mult = round(float(multiplier), 2)
-    bm_crashes = crashes[bm_id]
 
-    if round_id is not None:
-        for prev in reversed(bm_crashes[-50:]):
-            if prev.get("round_id") == round_id: return
-    if round_id is not None:
-        for prev in reversed(bm_crashes[-5:]):
+    with _record_lock:
+        bm_crashes = crashes[bm_id]
+
+        if round_id is not None:
+            for prev in reversed(bm_crashes[-50:]):
+                if prev.get("round_id") == round_id: return
+        if round_id is not None:
+            for prev in reversed(bm_crashes[-5:]):
+                try:
+                    age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
+                    if age > 15: break
+                    if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
+                        prev["round_id"] = round_id; return
+                except: pass
+        for prev in reversed(bm_crashes[-10:]):
             try:
                 age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
                 if age > 15: break
-                if round(float(prev["multiplier"]), 2) == mult and not prev.get("round_id"):
-                    prev["round_id"] = round_id; return
+                if round(float(prev["multiplier"]), 2) == mult: return
             except: pass
-    for prev in reversed(bm_crashes[-10:]):
-        try:
-            age = (now - datetime.fromisoformat(prev["timestamp"])).total_seconds()
-            if age > 15: break
-            if round(float(prev["multiplier"]), 2) == mult: return
-        except: pass
 
-    entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
-    if round_id is not None: entry["round_id"] = round_id
-    bm_crashes.append(entry)
-    if len(bm_crashes) > MAX_CRASHES:
-        crashes[bm_id] = bm_crashes[-MAX_CRASHES:]
+        entry = {"multiplier": mult, "timestamp": now.isoformat(), "id": str(uuid.uuid4())[:8]}
+        if round_id is not None: entry["round_id"] = round_id
+        bm_crashes.append(entry)
+        if len(bm_crashes) > MAX_CRASHES:
+            crashes[bm_id] = bm_crashes[-MAX_CRASHES:]
+
     for q in sse_subscribers.get(bm_id, []):
         try: q.put_nowait(entry)
         except: pass
