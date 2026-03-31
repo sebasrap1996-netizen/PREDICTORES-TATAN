@@ -1,11 +1,15 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.13 — Fix race condition en _record_crash (dedup de crashes en vivo):
-  Añadido _record_lock (threading.Lock) que envuelve el check-then-append
-  en _record_crash. Sin él, dos frames del mismo bookmaker que llegaban en
-  paralelo (RUSHBET/BETPLAY envían el crash en múltiples frames) podían
-  ambos pasar el check de dedup antes de que cualquiera hubiera escrito,
-  insertando el mismo crash dos veces. Mantiene todos los fixes v8.12.
+v8.14 — Triple fix de duplicación de crashes en vivo (RUSHBET/BETPLAY):
+  A) maxMultiplier añadido a X100_INT_KEYS: frames vivos y roundChartInfo
+     tenían mismatch (odd:157→1.57x vivo vs maxMultiplier:157→157.0x en scan)
+     → el upgrade del init fallaba y se insertaba un crash extra a 157.0x.
+  B) extract_game_mults deduplicado antes de return: si el mismo mult aparece
+     en inner_p.odd Y inner_p.result.odd → antes se llamaba _record_crash 2x.
+  C) roundChartInfo movido a STATE_COMMANDS: Spribe lo envía ~20-30s después
+     del crash real (fuera de la ventana de 15s del dedup por tiempo) → causaba
+     segundo registro del mismo crash. El crash real ya llega en frame "F"/"R".
+  También incluye fix v8.13 (_record_lock para race condition concurrente).
 """
 
 import os, json, uuid, time, struct, zlib, base64, re, threading, logging
@@ -246,7 +250,9 @@ GAME_COMMANDS = {
     "crash",
     "roundEnd", "roundend",
     "gameend", "gameEnd",
-    "roundChartInfo",
+    # roundChartInfo movido a STATE_COMMANDS (v8.14): Spribe lo envía ~20-30s
+    # después del frame de crash real ("F"/"R") — causaba duplicados al caer
+    # fuera de la ventana de 15s del dedup por tiempo.
 }
 
 TICK_COMMANDS = {
@@ -268,6 +274,9 @@ STATE_COMMANDS = {
     "changeState",
     # Spribe: historial al conectar — NO registrar como crashes en vivo
     "init",
+    # v8.14: resumen post-ronda — Spribe lo envía ~20-30s después del crash real
+    # El crash ya fue registrado por el frame "F"/"R". Evita duplicado tardío.
+    "roundChartInfo",
 }
 
 
@@ -345,6 +354,8 @@ def extract_game_mults(obj, label=""):
                 if isinstance(item, dict): results.extend(_scan_game_obj(item, label, cmd))
     if not results: results.extend(_scan_game_obj(p, label, cmd))
     if not results: results.extend(_scan_game_obj(obj, label, cmd))
+    # v8.14: dedup interno — el mismo mult puede aparecer en inner_p.odd Y inner_p.result.odd
+    seen_m = set(); results = [m for m in results if not (m in seen_m or seen_m.add(m))]
     return results, round_id
 
 
@@ -364,7 +375,8 @@ def _scan_game_obj(obj, label="", cmd="", depth=0):
         if key in GAME_KEYS:
             X100_INT_KEYS = {"odd", "odds", "k", "coef", "coeff",
                              "crashValue", "endK", "crashMultiplier",
-                             "finalMultiplier", "coefficient"}
+                             "finalMultiplier", "coefficient",
+                             "maxMultiplier"}   # v8.14: Spribe guarda maxMultiplier como x100 int
             if key in X100_INT_KEYS and isinstance(val, int):
                 if val < 100: continue
                 parsed_val = round(val / 100.0, 2)
@@ -760,7 +772,12 @@ def _start_ws(bm_id):
                 recovered = 0
                 for r in sorted_rounds:
                     rid  = r.get("roundId")
-                    mult = _parse_mult(r.get("maxMultiplier"))
+                    # v8.14: maxMultiplier en roundsInfo es x100 int (igual que "odd" en frames vivos)
+                    # _parse_mult no convierte — hay que hacer la división aquí explícitamente
+                    _raw_mult = r.get("maxMultiplier")
+                    if isinstance(_raw_mult, int) and _raw_mult >= 100:
+                        _raw_mult = round(_raw_mult / 100.0, 2)
+                    mult = _parse_mult(_raw_mult)
                     if not mult or not rid or rid in known_ids:
                         continue
                     mult_r = round(mult, 2)
@@ -901,8 +918,7 @@ def _start_ws(bm_id):
 
 def _record_crash(bm_id, bm_name, multiplier, round_id=None):
     """Registra crash con dedup thread-safe, preservando orden cronológico.
-    v8.13: _record_lock protege el check-then-append contra race conditions
-    cuando múltiples frames del mismo bookmaker llegan en paralelo."""
+    v8.13: _record_lock protege check-then-append contra race conditions."""
     now = datetime.now(timezone.utc)
     mult = round(float(multiplier), 2)
 
