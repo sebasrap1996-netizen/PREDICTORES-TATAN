@@ -1,6 +1,15 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.12 — Fix crashes en vivo: saltos y duplicados
+v8.13 — Fix SSL handshake failure + reconexión silenciosa perdida
+  1. ssl_opts: reemplazado flags sueltos por ssl.SSLContext(PROTOCOL_TLS_CLIENT)
+     con check_hostname=False y verify_mode=CERT_NONE. Esto envía SNI correcto
+     y negocia TLS 1.2+ con cipher suites modernas — resuelve SSLV3_ALERT_HANDSHAKE_FAILURE
+     en servidores como 1win (spribegaming64.click).
+  2. auth_state["login_retry_scheduled"]: nuevo flag que se activa SOLO cuando
+     login_error programa un _retry_login. on_close ahora verifica este flag
+     en vez de connection_status=="connecting", evitando silenciar la reconexión
+     cuando el SSL falla antes de que on_open llegue a ejecutarse.
+  Mantiene todos los fixes v8.12.
   1. Dedup temporal reducida a 8s (era 15s) y SOLO cuando no hay round_id.
      Con round_id el dedup exacto por ID ya es suficiente — la ventana de 15s
      eliminaba silenciosamente rondas reales con mismo mult (ej: dos 2.00x seguidos).
@@ -548,7 +557,8 @@ def _start_ws(bm_id):
     log.info("[%s] ═══ CONNECTING gen=%d to %s ═══", name, gen, ws_url)
 
     auth_state = {"step": "wait_connect", "handshake_done": False,
-                  "login_done": False, "msg3_sent": False}
+                  "login_done": False, "msg3_sent": False,
+                  "login_retry_scheduled": False}  # v8.13: True SOLO cuando login_error programa retry
     stats = {"sent": 0, "recv_bin": 0, "recv_txt": 0}
     last_frame_time = [time.time()]   # v8.6: tracker de último frame recibido
 
@@ -684,6 +694,7 @@ def _start_ws(bm_id):
                             name, ec, retries + 1, delay)
                 # NO incrementar ws_generation aquí — _start_ws ya lo incrementa internamente.
                 # Incrementarlo dos veces dejaba la vieja conexión "huérfana" sin cerrar.
+                auth_state["login_retry_scheduled"] = True   # v8.13: marcar ANTES de close()
                 ws.close()
                 def _retry_login():
                     time.sleep(delay)
@@ -805,11 +816,12 @@ def _start_ws(bm_id):
             log.warning("[%s] ⛔ No reconectando — login rechazado. "
                         "Actualiza las credenciales (msg2_b64) en el admin.", name)
             return
-        # v8.9: No reconectar si aún estamos en "connecting" — significa que
-        # login_error ya programó un _retry_login. Si on_close también reconecta,
-        # se generan dos conexiones paralelas que provocan ec=28 perpetuo.
-        if connection_status.get(bm_id) == "connecting":
-            log.info("[%s] on_close: status=connecting — reintento ya programado por login_error, omitiendo reconexión.", name)
+        # v8.9/v8.13: No reconectar si login_error ya programó un _retry_login.
+        # IMPORTANTE: usar el flag explícito, NO connection_status=="connecting".
+        # Si el SSL falla antes de on_open, el status queda en "connecting" pero
+        # ningún retry fue programado — verificar status causaba reconexión silenciosa perdida.
+        if auth_state["login_retry_scheduled"]:
+            log.info("[%s] on_close: retry de login ya programado — omitiendo reconexión.", name)
             return
         if bm_id in bookmakers and bookmakers[bm_id].get("active", False):
             # ── v8.2: Backoff exponencial según intentos fallidos ──
@@ -860,8 +872,15 @@ def _start_ws(bm_id):
         "Pragma": "no-cache",
     }
 
+    # v8.13: SSLContext explícito — evita SSLV3_ALERT_HANDSHAKE_FAILURE.
+    # Flags sueltos (cert_reqs + check_hostname) le dejan a websocket-client crear
+    # un contexto interno con configuración subóptima (cipher suites legacy, SNI incorrecto).
+    # Con PROTOCOL_TLS_CLIENT Python negocia TLS 1.2+ con suites modernas y envía SNI.
     import ssl as _ssl
-    ssl_opts = {"cert_reqs": _ssl.CERT_NONE, "check_hostname": False}
+    _ssl_ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = _ssl.CERT_NONE
+    ssl_opts = {"ssl_context": _ssl_ctx}
 
     ws_app = websocket.WebSocketApp(
         ws_url,
