@@ -1,9 +1,6 @@
 """
 PREDICTORES TATAN — Aviator Bookmaker Scraping Manager
-v8.13 — Live coefficient SSE endpoint (/api/aviator/live/<num_id>)
-  Captura changeState, tick frames (x/X/update) y _record_crash
-  para transmitir el coeficiente en tiempo real al frontend.
-  Mantiene todos los fixes v8.12.
+v8.12 — Fix crashes en vivo: saltos y duplicados
   1. Dedup temporal reducida a 8s (era 15s) y SOLO cuando no hay round_id.
      Con round_id el dedup exacto por ID ya es suficiente — la ventana de 15s
      eliminaba silenciosamente rondas reales con mismo mult (ej: dos 2.00x seguidos).
@@ -68,12 +65,6 @@ ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zom
 ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
 _save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
-
-# ---------------------------------------------------------------------------
-# Live round state (coeficiente en tiempo real)
-# ---------------------------------------------------------------------------
-live_state: dict = {}          # bid → {"phase": "BETTING"|"PLAYING"|"CRASHED", "coefficient": float, "ts": float}
-live_subscribers: dict = defaultdict(list)  # bid → [Queue, ...]
 
 def _load_config():
     """Carga bookmakers + crashes del disco."""
@@ -646,61 +637,6 @@ def _start_ws(bm_id):
             log.info("[%s] Frame: %s (game=%s) decoded=%s",
                      name, ftype, is_game, _sj(parsed)[:600])
 
-            # ── LIVE STATE: capturar estado de ronda en tiempo real ──
-            # changeState / ext:changeState contiene el phase de la ronda
-            if "changeState" in ftype or "changestate" in ftype.lower():
-                try:
-                    inner = parsed.get("p", {})
-                    if isinstance(inner, dict):
-                        inner = inner.get("p", inner)
-                    if isinstance(inner, dict):
-                        phase_raw = (inner.get("gameState") or
-                                     inner.get("state") or
-                                     inner.get("status") or "")
-                        coef_raw  = (inner.get("coefficient") or
-                                     inner.get("crashX") or
-                                     inner.get("odd") or None)
-                        # Normalizar phase
-                        p_up = str(phase_raw).upper()
-                        if any(x in p_up for x in ("BET", "WAIT", "IDLE")):
-                            phase = "BETTING"
-                        elif any(x in p_up for x in ("PLAY", "FLYING", "RUNNING", "RUN")):
-                            phase = "PLAYING"
-                        elif any(x in p_up for x in ("CRASH", "END", "FINISH", "OVER", "BUST")):
-                            phase = "CRASHED"
-                        else:
-                            phase = None
-                        if phase:
-                            # Convertir coef si viene x100 (entero)
-                            coef = None
-                            if coef_raw is not None:
-                                try:
-                                    cv = float(coef_raw)
-                                    if cv > 100: cv = cv / 100.0
-                                    coef = round(cv, 2)
-                                except: pass
-                            _update_live_state(bm_id, phase, coef)
-                except Exception as _le:
-                    log.debug("[%s] live state parse err: %s", name, _le)
-
-            # Capturar coeficiente en vuelo de frames tick (X, x, update)
-            # Estos llegan mientras el avión está volando — tienen el coef actual
-            elif ftype and any(t in ftype for t in ("ext:x", "ext:X", "ext:tick", "ext:update")):
-                try:
-                    inner = parsed.get("p", {})
-                    if isinstance(inner, dict):
-                        inner = inner.get("p", inner)
-                    if isinstance(inner, dict):
-                        coef_raw = (inner.get("coefficient") or
-                                    inner.get("odd") or
-                                    inner.get("coef") or None)
-                        if coef_raw is not None:
-                            cv = float(coef_raw)
-                            if cv > 100: cv = cv / 100.0
-                            if cv >= 1.0:
-                                _update_live_state(bm_id, "PLAYING", round(cv, 2))
-                except: pass
-
         # ── v8.5: SFS2X Keepalive — responder ping del servidor con el mismo frame ──
         # El servidor envía c=7 cada ~60s. Sin pong → timeout → CLOSED → reconnecting
         if ftype == "ping":
@@ -991,36 +927,8 @@ def _record_crash(bm_id, bm_name, multiplier, round_id=None):
         except: pass
     log.info("[%s] ★★★ CRASH: %.2fx round=%s total=%d ★★★",
              bm_name, mult, round_id, len(crashes[bm_id]))
-    # Notificar estado en vivo: ronda terminó con este multiplicador
-    _update_live_state(bm_id, "CRASHED", mult)
     # v8.5/v8.6: marcar pendiente (thread-safe Event) en vez de thread por crash
     _save_event.set()
-
-
-def _update_live_state(bm_id, phase, coefficient=None):
-    """Actualiza el estado en vivo de la ronda y notifica a suscriptores SSE."""
-    now = time.time()
-    prev = live_state.get(bm_id, {})
-    
-    # Filtrar actualizaciones redundantes del mismo coeficiente en vuelo
-    if (phase == "PLAYING" and 
-        prev.get("phase") == "PLAYING" and 
-        coefficient is not None and
-        prev.get("coefficient") == coefficient):
-        return
-    
-    state = {"phase": phase, "ts": now}
-    if coefficient is not None:
-        state["coefficient"] = round(float(coefficient), 2)
-    live_state[bm_id] = state
-    
-    # Notificar a todos los suscriptores SSE
-    event = {"phase": phase}
-    if coefficient is not None:
-        event["coefficient"] = state["coefficient"]
-    for q in live_subscribers.get(bm_id, []):
-        try: q.put_nowait(event)
-        except: pass
 
 
 def _stop_ws(bm_id):
@@ -1140,57 +1048,6 @@ def stream_crashes(bid):
     return Response(stream_with_context(gen()), mimetype="text/event-stream",
                     headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no",
                              "Connection":"keep-alive"})
-
-@app.route("/api/aviator/live/<int:num_id>")
-def live_stream(num_id):
-    """SSE: transmite el coeficiente en tiempo real de la ronda activa.
-    Eventos:
-      data: {"phase": "PLAYING", "coefficient": 2.45}
-      data: {"phase": "CRASHED", "coefficient": 3.12}
-      data: {"phase": "BETTING"}
-    """
-    bid = _num_to_bid.get(num_id)
-    if not bid or bid not in bookmakers:
-        return jsonify({"error": f"Bookmaker #{num_id} not found"}), 404
-    q = Queue(maxsize=500)
-    live_subscribers[bid].append(q)
-    # Enviar estado actual inmediatamente
-    current = live_state.get(bid)
-    def gen():
-        try:
-            if current:
-                yield "data: " + json.dumps(current) + "\n\n"
-            while True:
-                try:
-                    e = q.get(timeout=5)
-                    yield "data: " + json.dumps(e) + "\n\n"
-                except Empty:
-                    yield ": hb\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            try: live_subscribers[bid].remove(q)
-            except: pass
-    return Response(
-        stream_with_context(gen()),
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        }
-    )
-
-
-@app.route("/api/aviator/live-state/<int:num_id>")
-def live_state_snapshot(num_id):
-    """REST: devuelve el estado en vivo actual (para polling fallback)."""
-    bid = _num_to_bid.get(num_id)
-    if not bid or bid not in bookmakers:
-        return jsonify({"error": f"Bookmaker #{num_id} not found"}), 404
-    state = live_state.get(bid, {"phase": "UNKNOWN"})
-    return jsonify({**state, "num_id": num_id, "bookmaker": bookmakers[bid].get("name", bid)})
-
 
 @app.route("/api/aviator/bookmakers/<bid>/debug")
 def get_debug(bid):
