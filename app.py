@@ -74,7 +74,8 @@ ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zom
 ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
 _save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
-_ws_start_locks: dict = defaultdict(threading.Lock)  # v8.15: evita doble _start_ws concurrente → dr=1
+_ws_connecting: set = set()        # v8.15: bm_ids con conexión en progreso — evita doble sesión → dr=1
+_ws_connecting_lock = threading.Lock()
 
 def _load_config():
     """Carga bookmakers + crashes del disco."""
@@ -525,16 +526,15 @@ def _b64_to_bytes(s):
 
 
 def _start_ws(bm_id):
-    # v8.15: si ya hay un _start_ws en curso para este bookmaker, no entrar.
-    # Evita doble sesión simultánea (watchdog + on_close compitiendo) → server_disconnect dr=1.
-    lock = _ws_start_locks[bm_id]
-    if not lock.acquire(blocking=False):
-        log.info("[%s] _start_ws ya en curso — descartando llamada duplicada", bm_id)
-        return
-    try:
-        _start_ws_inner(bm_id)
-    finally:
-        lock.release()
+    # v8.15: si ya hay una conexión en progreso (sleep pre-connect + auth) para este
+    # bookmaker, descartar. El flag se limpia en on_open (auth ok) o en on_close
+    # (falló antes de conectar). Evita doble sesión → server_disconnect dr=1.
+    with _ws_connecting_lock:
+        if bm_id in _ws_connecting:
+            log.info("[%s] _start_ws ya en progreso — descartando llamada duplicada", bm_id)
+            return
+        _ws_connecting.add(bm_id)
+    _start_ws_inner(bm_id)
 
 def _start_ws_inner(bm_id):
     bm = bookmakers.get(bm_id)
@@ -591,6 +591,9 @@ def _start_ws_inner(bm_id):
         connection_status[bm_id] = "connected"
         ws_reconnect_attempts[bm_id] = 0
         ws_login_retries[bm_id] = 0       # v8.8: reset reintentos de login al conectar
+        # v8.15: limpiar flag de conexión en progreso — ya estamos conectados
+        with _ws_connecting_lock:
+            _ws_connecting.discard(bm_id)
         auth_state["step"] = "wait_handshake_resp"
         send_msg(ws, msg1, 1, "Handshake")
 
@@ -812,6 +815,9 @@ def _start_ws_inner(bm_id):
         total_recv = stats["recv_bin"] + stats["recv_txt"]
         log.info("[%s] CLOSED gen=%d code=%s | sent=%d recv=%d",
                  name, gen, code, stats["sent"], total_recv)
+        # v8.15: limpiar flag de conexión en progreso (por si on_open nunca se ejecutó)
+        with _ws_connecting_lock:
+            _ws_connecting.discard(bm_id)
         # v8.3: limpiar de la lista de zombies
         try:
             lst = ws_all_connections.get(bm_id, [])
