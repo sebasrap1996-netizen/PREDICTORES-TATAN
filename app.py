@@ -74,6 +74,7 @@ ws_all_connections: dict = {}      # lista de TODAS las ws vivas (para matar zom
 ws_login_retries: dict = {}        # v8.8: contador de reintentos de login por bookmaker
 _save_event = threading.Event()    # thread-safe flag para guardar crashes en batch
 _save_lock = threading.Lock()
+_ws_start_locks: dict = defaultdict(threading.Lock)  # v8.15: evita doble _start_ws concurrente → dr=1
 
 def _load_config():
     """Carga bookmakers + crashes del disco."""
@@ -524,6 +525,18 @@ def _b64_to_bytes(s):
 
 
 def _start_ws(bm_id):
+    # v8.15: si ya hay un _start_ws en curso para este bookmaker, no entrar.
+    # Evita doble sesión simultánea (watchdog + on_close compitiendo) → server_disconnect dr=1.
+    lock = _ws_start_locks[bm_id]
+    if not lock.acquire(blocking=False):
+        log.info("[%s] _start_ws ya en curso — descartando llamada duplicada", bm_id)
+        return
+    try:
+        _start_ws_inner(bm_id)
+    finally:
+        lock.release()
+
+def _start_ws_inner(bm_id):
     bm = bookmakers.get(bm_id)
     if not bm: return
     ws_url = bm.get("ws_url", "").strip()
