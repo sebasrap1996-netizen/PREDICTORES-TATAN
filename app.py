@@ -542,11 +542,6 @@ def _start_ws(bm_id):
         try: zombie.close()
         except: pass
 
-    # v8.8: pausa 5s para que el servidor registre el cierre antes del nuevo login
-    # Sin esto, la reconexión proactiva puede provocar ec=28 (sesión duplicada transitoria)
-    # Aumentado de 2s a 5s para compatibilidad con 1win (más lento registrando cierres)
-    time.sleep(5)
-
     msg1 = _b64_to_bytes(bm.get("msg1_b64", ""))
     msg2 = _b64_to_bytes(bm.get("msg2_b64", ""))
     msg3 = _b64_to_bytes(bm.get("msg3_b64", ""))
@@ -890,12 +885,18 @@ def _start_ws(bm_id):
     )
     ws_connections[bm_id] = ws_app
     ws_all_connections.setdefault(bm_id, []).append(ws_app)   # v8.3: zombie tracking
+    def _run_ws():
+        # v8.14: pausa movida al thread para no bloquear el hilo que llama a _start_ws.
+        # El sleep(5) sigue siendo necesario para que el servidor registre el cierre
+        # antes del nuevo login (evita ec=28 por sesión duplicada transitoria).
+        time.sleep(5)
+        ws_app.run_forever(ping_interval=0, ping_timeout=None, sslopt=ssl_opts)
+
     t = threading.Thread(
-        target=ws_app.run_forever,
+        target=_run_ws,
         # NO enviar pings WebSocket — SFS2X/Spribe no responde pongs
         # y websocket-client cierra la conexión al expirar ping_timeout.
         # SFS2X tiene su propio keepalive interno.
-        kwargs={"ping_interval": 0, "ping_timeout": None, "sslopt": ssl_opts},
         daemon=True,
     )
     t.start()
